@@ -8,8 +8,8 @@ let macLibgodotTarget: Target = .binaryTarget(
 
 let iosLibgodotTarget: Target = .binaryTarget(
     name: "ios_libgodot",
-    url: "https://github.com/migueldeicaza/godot/releases/download/v4.6.0/libgodot-ios.xcframework.zip",
-    checksum: "d91b336b6e2f475e49cae0c22625646e1f9d5435a95b03f20da18707975f4a89"
+    url: "https://github.com/levi/godot/releases/download/v4.6.0-fix1/libgodot-ios.xcframework.zip",
+    checksum: "a8637d2c1669a92cda00b4b11ffce71211429e67e73e4f5ff52ded94695efd52"
 )
 
 let package = Package(
