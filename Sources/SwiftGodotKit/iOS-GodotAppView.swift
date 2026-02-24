@@ -352,6 +352,7 @@ public class UIGodotAppView: UIView {
         }
     }
 
+
 }
 
 private extension UIGodotAppView {

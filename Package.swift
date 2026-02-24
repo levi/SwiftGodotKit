@@ -2,8 +2,8 @@
 import PackageDescription
 let macLibgodotTarget: Target = .binaryTarget(
     name: "mac_libgodot",
-    url: "https://github.com/migueldeicaza/godot/releases/download/v4.6.0/libgodot-macos.xcframework.zip",
-    checksum: "fb1d093421a16db2ccb8bf52705c3f52e2003dd8d5253920e766ad7f906dae4f"
+    url: "https://github.com/migueldeicaza/godot/releases/download/v4.6.3/libgodot-macos.xcframework.zip",
+    checksum: "f092df294a1c4fac20951f20292ec583aefb3bceab872efd2f495ce6e2504859"
 )
 
 let iosLibgodotTarget: Target = .binaryTarget(
@@ -36,6 +36,7 @@ let package = Package(
             dependencies: [
                 "SwiftGodot",
                 "libgodot",
+                .target(name: "apple_plugin_stubs", condition: .when(platforms: [.iOS])),
                 .target(name: "mac_libgodot", condition: .when(platforms: [.macOS])),
                 .target(name: "ios_libgodot", condition: .when(platforms: [.iOS])),
             ]
@@ -54,6 +55,12 @@ let package = Package(
                 .copy(".godot"),
                 .copy("godot"),
             ]
+        ),
+
+        .target(
+            name: "apple_plugin_stubs",
+            path: "Sources/apple_plugin_stubs",
+            publicHeadersPath: "include"
         ),
 
         macLibgodotTarget,
