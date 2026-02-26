@@ -114,52 +114,181 @@ public class GodotView: NSView {
         Input.parseInputEvent(keyEvent)
     }
     
+    // MARK: - Mouse motion callback
+    //
+    // InputEventMouseMotion cannot go through Input.parseInputEvent() in
+    // embedded mode because Viewport GUI processing calls
+    // DisplayServerEmbedded::cursor_set_shape() which crashes.
+    // Instead, motion events are forwarded via this static callback so the
+    // host application can handle them directly.
+    public static var mouseMotionHandler: ((_ event: InputEventMouseMotion) -> Void)?
+
+    public override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    // MARK: - Left mouse button
+
     var mouseDownControl: Bool = false
     override public func mouseDown(with event: NSEvent) {
+        let loc = convert(event.locationInWindow, from: nil)
+        print("[GodotView.mouseDown] loc=(\(Int(loc.x)),\(Int(bounds.height - loc.y))) isFirstResponder=\(self == window?.firstResponder)")
         if event.modifierFlags.contains(.control) {
             mouseDownControl = true
-            processEvent(event: event, index: .right, pressed: true, outOfStream: false)
+            processMouseButtonEvent(event: event, index: .right, pressed: true, outOfStream: false)
         } else {
             mouseDownControl = false
-            processEvent(event: event, index: .left, pressed: true, outOfStream: false)
+            processMouseButtonEvent(event: event, index: .left, pressed: true, outOfStream: false)
         }
     }
 
     override public func mouseUp(with event: NSEvent) {
         if mouseDownControl {
-            processEvent(event: event, index: .right, pressed: false, outOfStream: false)
+            processMouseButtonEvent(event: event, index: .right, pressed: false, outOfStream: false)
         } else {
-            processEvent(event: event, index: .left, pressed: false, outOfStream: false)
+            processMouseButtonEvent(event: event, index: .left, pressed: false, outOfStream: false)
         }
     }
 
-    func processEvent(event: NSEvent, index: MouseButton, pressed: Bool, outOfStream: Bool) {
+    override public func mouseDragged(with event: NSEvent) {
+        print("[GodotView.mouseDragged]")
+        processMouseMotionEvent(event: event)
+    }
+
+    // MARK: - Right mouse button
+
+    override public func rightMouseDown(with event: NSEvent) {
+        processMouseButtonEvent(event: event, index: .right, pressed: true, outOfStream: false)
+    }
+
+    override public func rightMouseUp(with event: NSEvent) {
+        processMouseButtonEvent(event: event, index: .right, pressed: false, outOfStream: false)
+    }
+
+    override public func rightMouseDragged(with event: NSEvent) {
+        processMouseMotionEvent(event: event)
+    }
+
+    // MARK: - Other (middle) mouse button
+
+    override public func otherMouseDown(with event: NSEvent) {
+        processMouseButtonEvent(event: event, index: .middle, pressed: true, outOfStream: false)
+    }
+
+    override public func otherMouseUp(with event: NSEvent) {
+        processMouseButtonEvent(event: event, index: .middle, pressed: false, outOfStream: false)
+    }
+
+    override public func otherMouseDragged(with event: NSEvent) {
+        processMouseMotionEvent(event: event)
+    }
+
+    // MARK: - Scroll wheel
+
+    override public func scrollWheel(with event: NSEvent) {
+        let locationInView = convert(event.locationInWindow, from: nil)
+        let vpos = Vector2(x: Float(locationInView.x),
+                           y: Float(bounds.height - locationInView.y))
+        let mask = currentButtonMask()
+
+        // Vertical scroll
+        if event.scrollingDeltaY != 0 {
+            let index: MouseButton = event.scrollingDeltaY > 0 ? .wheelUp : .wheelDown
+            let factor = event.hasPreciseScrollingDeltas
+                ? Float(abs(event.scrollingDeltaY)) / 120.0
+                : Float(abs(event.scrollingDeltaY))
+            let mb = InputEventMouseButton()
+            mb.windowId = windowId
+            mb.buttonIndex = index
+            mb.factor = Double(max(factor, 1.0))
+            mb.position = vpos
+            mb.globalPosition = vpos
+            mb.buttonMask = mask
+
+            mb.pressed = true
+            Input.parseInputEvent(mb)
+
+            mb.pressed = false
+            Input.parseInputEvent(mb)
+        }
+
+        // Horizontal scroll
+        if event.scrollingDeltaX != 0 {
+            let index: MouseButton = event.scrollingDeltaX > 0 ? .wheelLeft : .wheelRight
+            let factor = event.hasPreciseScrollingDeltas
+                ? Float(abs(event.scrollingDeltaX)) / 120.0
+                : Float(abs(event.scrollingDeltaX))
+            let mb = InputEventMouseButton()
+            mb.windowId = windowId
+            mb.buttonIndex = index
+            mb.factor = Double(max(factor, 1.0))
+            mb.position = vpos
+            mb.globalPosition = vpos
+            mb.buttonMask = mask
+
+            mb.pressed = true
+            Input.parseInputEvent(mb)
+
+            mb.pressed = false
+            Input.parseInputEvent(mb)
+        }
+    }
+
+    // MARK: - Event construction helpers
+
+    func processMouseButtonEvent(event: NSEvent, index: MouseButton, pressed: Bool, outOfStream: Bool) {
+        print("[GodotView.processMouseButtonEvent] index=\(index) pressed=\(pressed)")
         let mb = InputEventMouseButton()
         mb.windowId = windowId
-        mb.buttonIndex = index == .left ? MouseButton.left : index == .right ? MouseButton.right : .none
+        mb.buttonIndex = index == .left ? MouseButton.left : index == .right ? MouseButton.right : index == .middle ? MouseButton.middle : .none
 
         mb.pressed = pressed
-        let local = event.locationInWindow
-        let locationInView = convert(local, from: nil)
+        let locationInView = convert(event.locationInWindow, from: nil)
 
         let vpos = Vector2(x: Float(locationInView.x),
                            y: Float(bounds.height - locationInView.y))
         mb.globalPosition = vpos
         mb.position = vpos
 
-        var mask: MouseButtonMask = []
-        if index == .left {
-            mask = [.left]
-        } else if index == .right {
-            mask = [.right]
-        } else if index == .middle {
-            mask = [.middle]
-        }
-        mb.buttonMask = mask
+        mb.buttonMask = currentButtonMask()
         if !outOfStream && index == .left && pressed {
             mb.doubleClick = event.clickCount == 2
         }
         Input.parseInputEvent(mb)
+    }
+
+    func processMouseMotionEvent(event: NSEvent) {
+        let mm = InputEventMouseMotion()
+        mm.windowId = windowId
+
+        let locationInView = convert(event.locationInWindow, from: nil)
+        let vpos = Vector2(x: Float(locationInView.x),
+                           y: Float(bounds.height - locationInView.y))
+        mm.position = vpos
+        mm.globalPosition = vpos
+
+        mm.relative = Vector2(x: Float(event.deltaX), y: Float(event.deltaY))
+        mm.velocity = mm.relative
+        mm.buttonMask = currentButtonMask()
+
+        if event.type == .tabletPoint || event.subtype == .tabletPoint {
+            mm.pressure = Double(event.pressure)
+            mm.tilt = Vector2(x: Float(event.tilt.x), y: Float(event.tilt.y))
+        }
+
+        // Cannot use Input.parseInputEvent() for mouse motion in embedded
+        // mode — Viewport GUI processing calls cursor_set_shape() which
+        // crashes in DisplayServerEmbedded. Forward via callback instead.
+        GodotView.mouseMotionHandler?(mm)
+    }
+
+    private func currentButtonMask() -> MouseButtonMask {
+        var mask: MouseButtonMask = []
+        let pressed = NSEvent.pressedMouseButtons
+        if pressed & (1 << 0) != 0 { mask.insert(.left) }
+        if pressed & (1 << 1) != 0 { mask.insert(.right) }
+        if pressed & (1 << 2) != 0 { mask.insert(.middle) }
+        return mask
     }
 
 }
