@@ -6,6 +6,7 @@
 import OSLog
 import SwiftUI
 import SwiftGodot
+import UIKit
 
 #if os(iOS)
 public struct GodotAppView: UIViewRepresentable {
@@ -56,6 +57,17 @@ public struct GodotAppView: UIViewRepresentable {
         uiView.syncCallbackRegistration()
         uiView.startGodotInstance()
     }
+
+    public func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIGodotAppView, context: Context) -> CGSize? {
+        let fallbackSize = uiView.window?.bounds.size
+            ?? uiView.superview?.bounds.size
+            ?? UIScreen.main.bounds.size
+        return CGSize(
+            width: proposal.width ?? fallbackSize.width,
+            height: proposal.height ?? fallbackSize.height
+        )
+    }
+
 }
 
 typealias TTGodotAppView = UIGodotAppView
@@ -66,9 +78,13 @@ public class UIGodotAppView: UIView {
     private var displayLink : CADisplayLink? = nil
     
     private var embedded: DisplayServerEmbedded?
+    private weak var nativeIOSViewController: UIViewController?
     private var callbackToken: UUID?
     private weak var callbackApp: GodotApp?
     private var didEmitDisplayServerNotEmbeddedWarning = false
+    private var didEmitNativeIOSHostWarning = false
+    private var nativeIOSRenderingStarted = false
+    private var didRegisterNativeIOSViewController = false
     
     public var app: GodotApp?
     public var source: String?
@@ -83,46 +99,65 @@ public class UIGodotAppView: UIView {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
     }
+
+    public override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+    }
     
     private func commonInit() {
+        guard usesEmbeddedDisplayDriver else {
+            backgroundColor = .black
+            return
+        }
         let renderingLayer = CAMetalLayer()
         let size = max(UIScreen.main.bounds.size.width, UIScreen.main.bounds.size.height)
         renderingLayer.frame.size = CGSize(width: size, height: size)
-        renderingLayer.contentsScale = self.contentScaleFactor
+        renderingLayer.backgroundColor = UIColor.black.cgColor
         
         layer.addSublayer(renderingLayer)
+        backgroundColor = .black
         self.renderingLayer = renderingLayer
+        updateRenderingLayerGeometry()
     }
     
     deinit {
+        stopNativeIOSRendering()
+        nativeIOSViewController?.view.removeFromSuperview()
         renderingLayer?.removeFromSuperlayer()
         unregisterCallbacks()
     }
     
     public override var bounds: CGRect {
         didSet {
-            resizeWindow()
+            if usesEmbeddedDisplayDriver {
+                updateRenderingLayerGeometry()
+                resizeWindow()
+            } else {
+                layoutNativeIOSContainer()
+            }
         }
     }
     
     func resizeWindow() {
-        guard let embedded else {
-            logger.error("UIGodotApPView.resizeWindow invoked with no embedded window")
+        guard usesEmbeddedDisplayDriver else { return }
+        let size = pixelSize()
+
+        if let embedded {
+            embedded.resizeWindow(
+                size: size,
+                id: Int32(DisplayServer.mainWindowId)
+            )
             return
         }
-        
-        embedded.resizeWindow(
-            size: Vector2i(x: Int32(self.bounds.size.width * self.contentScaleFactor), y: Int32(self.bounds.size.height * self.contentScaleFactor)),
-            id: Int32(DisplayServer.mainWindowId)
-        )
+
+        logger.error("UIGodotAppView.resizeWindow invoked with no embedded window")
     }
 
     public override func layoutSubviews() {
-        if let renderingLayer {
-            renderingLayer.frame = self.bounds
-        }
-        if let instance = app?.instance {
-            if instance.isStarted() {
+        super.layoutSubviews()
+        if usesEmbeddedDisplayDriver {
+            updateRenderingLayerGeometry()
+            if let instance = app?.instance, instance.isStarted() {
                 if embedded == nil {
                     if let displayServer = DisplayServer.shared as? DisplayServerEmbedded {
                         embedded = displayServer
@@ -134,8 +169,10 @@ public class UIGodotAppView: UIView {
                     resizeWindow()
                 }
             }
+            return
         }
-        super.layoutSubviews()
+
+        layoutNativeIOSContainer()
     }
     
     func startGodotInstance() {
@@ -143,18 +180,29 @@ public class UIGodotAppView: UIView {
         guard let app else {
             return
         }
-        if renderingLayer == nil {
+
+        if renderingLayer == nil && usesEmbeddedDisplayDriver {
             commonInit()
         }
-        guard let renderingLayer else {
-            Logger.App.error("startGodotInstance: renderingLayer was nil")
-            return
+
+        if !usesEmbeddedDisplayDriver {
+            attachNativeIOSContainerIfNeeded()
         }
+
         if let instance = app.instance {
-            let rendererNativeSurface = RenderingNativeSurfaceApple.create(layer: UInt(bitPattern: Unmanaged.passUnretained(renderingLayer).toOpaque()))
-            DisplayServerEmbedded.setNativeSurface(rendererNativeSurface)
-            if !instance.isStarted() {
-                instance.start()
+            if usesEmbeddedDisplayDriver {
+                guard let renderingLayer else {
+                    Logger.App.error("startGodotInstance: renderingLayer was nil")
+                    return
+                }
+                let rendererNativeSurface = RenderingNativeSurfaceApple.create(
+                    layer: UInt(bitPattern: Unmanaged.passUnretained(renderingLayer).toOpaque())
+                )
+                DisplayServerEmbedded.setNativeSurface(rendererNativeSurface)
+            }
+
+            if usesEmbeddedDisplayDriver && !instance.isStarted() {
+                _ = instance.start()
                 app.startPending()
             }
             if displayLink == nil {
@@ -162,15 +210,19 @@ public class UIGodotAppView: UIView {
                 displayLink.add(to: .current, forMode: RunLoop.Mode.default)
                 self.displayLink = displayLink
             }
-            if embedded == nil {
+
+            if usesEmbeddedDisplayDriver, embedded == nil {
                 if let displayServer = DisplayServer.shared as? DisplayServerEmbedded {
                     embedded = displayServer
                 } else {
                     emitDisplayServerNotEmbeddedWarning(context: "startGodotInstance")
                 }
             }
-            if embedded != nil {
+
+            if usesEmbeddedDisplayDriver {
                 resizeWindow()
+            } else {
+                syncNativeIOSRenderingState()
             }
             app.pollBridgeAndReadiness()
         } else {
@@ -179,7 +231,7 @@ public class UIGodotAppView: UIView {
     }
 
     public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let app, let instance = app.instance, let renderingLayer else { return }
+        guard let app, app.instance != nil, let renderingLayer else { return }
         let contentsScale = renderingLayer.contentsScale
         
         var touchData: [[String : Any]] = []
@@ -197,7 +249,7 @@ public class UIGodotAppView: UIView {
             let tapCount = touch.tapCount
             touchData.append([ "touchId": touchId, "location": location, "tapCount": tapCount ])
         }
-        {
+        if app.displayDriver == "embedded" {
             let windowId = Int32(DisplayServer.mainWindowId)
             for touch in touchData {
                 guard let touchId = touch["touchId"] as? Int,
@@ -215,11 +267,27 @@ public class UIGodotAppView: UIView {
                     window: windowId
                 )
             }
-        }()
+        } else {
+            let windowId = currentWindowId()
+            for touch in touchData {
+                guard let touchId = touch["touchId"] as? Int,
+                      let location = touch["location"] as? CGPoint,
+                      let tapCount = touch["tapCount"] as? Int
+                else { continue }
+
+                let event = InputEventScreenTouch()
+                event.index = Int32(touchId)
+                event.position = scaledVector(from: location, scale: contentsScale)
+                event.pressed = true
+                event.doubleTap = tapCount > 1
+                event.windowId = windowId
+                Input.parseInputEvent(event)
+            }
+        }
     }
     
     public override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let app, let renderingLayer, let instance = app.instance else { return }
+        guard let app, app.instance != nil, let renderingLayer else { return }
         let contentsScale = renderingLayer.contentsScale
         
         var touchData: [[String : Any]] = []
@@ -247,7 +315,7 @@ public class UIGodotAppView: UIView {
             touchData.append([ "touchId": touchId, "location": location, "prevLocation": prevLocation, "alt": alt, "azim": azim, "force": force, "maximumPossibleForce": maximumPossibleForce ])
         }
         
-        {
+        if app.displayDriver == "embedded" {
             let windowId = Int32(DisplayServer.mainWindowId)
             for touch in touchData {
                 guard let touchId = touch["touchId"] as? Int,
@@ -260,11 +328,36 @@ public class UIGodotAppView: UIView {
                       let displayServer = DisplayServer.shared as? DisplayServerEmbedded else { continue }
                 displayServer.touchDrag(idx: Int32(touchId), prevX: Int32(prevLocation.x  * contentsScale), prevY: Int32(prevLocation.y  * contentsScale), x: Int32(location.x * contentsScale), y: Int32(location.y * contentsScale), pressure: Double(force) / Double(maximumPossibleForce), tilt: Vector2(x: Float(azim.dx) * Float(cos(alt)), y: Float(azim.dy) * cos(Float(alt))), window: windowId)
             }
-        }()
+        } else {
+            let windowId = currentWindowId()
+            for touch in touchData {
+                guard let touchId = touch["touchId"] as? Int,
+                      let location = touch["location"] as? CGPoint,
+                      let prevLocation = touch["prevLocation"] as? CGPoint,
+                      let alt = touch["alt"] as? CGFloat,
+                      let azim = touch["azim"] as? CGVector,
+                      let force = touch["force"] as? CGFloat,
+                      let maximumPossibleForce = touch["maximumPossibleForce"] as? CGFloat else { continue }
+
+                let relative = CGPoint(x: location.x - prevLocation.x, y: location.y - prevLocation.y)
+                let scaledRelative = scaledVector(from: relative, scale: contentsScale)
+                let drag = InputEventScreenDrag()
+                drag.index = Int32(touchId)
+                drag.position = scaledVector(from: location, scale: contentsScale)
+                drag.relative = scaledRelative
+                drag.screenRelative = scaledRelative
+                drag.velocity = scaledRelative
+                drag.screenVelocity = scaledRelative
+                drag.pressure = maximumPossibleForce > 0 ? Double(force) / Double(maximumPossibleForce) : 1
+                drag.tilt = Vector2(x: Float(azim.dx) * Float(cos(alt)), y: Float(azim.dy) * cos(Float(alt)))
+                drag.windowId = windowId
+                Input.parseInputEvent(drag)
+            }
+        }
     }
 
     public override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let app, let renderingLayer, let instance = app.instance else { return }
+        guard let app, app.instance != nil, let renderingLayer else { return }
         let contentsScale = renderingLayer.contentsScale
         
         var touchData: [[String : Any]] = []
@@ -283,7 +376,7 @@ public class UIGodotAppView: UIView {
             touchData.append([ "touchId": touchId, "location": location ])
         }
         
-        {
+        if app.displayDriver == "embedded" {
             let windowId = Int32(DisplayServer.mainWindowId)
             for touch in touchData {
                 guard let touchId = touch["touchId"] as? Int,
@@ -298,11 +391,24 @@ public class UIGodotAppView: UIView {
                     window: windowId
                 )
             }
-        }()
+        } else {
+            let windowId = currentWindowId()
+            for touch in touchData {
+                guard let touchId = touch["touchId"] as? Int,
+                      let location = touch["location"] as? CGPoint else { continue }
+
+                let event = InputEventScreenTouch()
+                event.index = Int32(touchId)
+                event.position = scaledVector(from: location, scale: contentsScale)
+                event.pressed = false
+                event.windowId = windowId
+                Input.parseInputEvent(event)
+            }
+        }
     }
     
     public override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let app, let instance = app.instance else { return }
+        guard let app, app.instance != nil else { return }
         var touchData: [[String : Any]] = []
         for touch in touches {
             let touchId = app.getTouchId(touch: touch)
@@ -313,7 +419,7 @@ public class UIGodotAppView: UIView {
             touchData.append([ "touchId": touchId ])
         }
         
-        {
+        if app.displayDriver == "embedded" {
             let windowId = Int32(DisplayServer.mainWindowId)
             for touch in touchData {
                 guard let touchId = touch["touchId"] as? Int,
@@ -321,12 +427,26 @@ public class UIGodotAppView: UIView {
                 
                 displayServer.touchesCanceled(idx: Int32(touchId), window: windowId)
             }
-        }()
+        } else {
+            let windowId = currentWindowId()
+            for touch in touchData {
+                guard let touchId = touch["touchId"] as? Int else { continue }
+
+                let event = InputEventScreenTouch()
+                event.index = Int32(touchId)
+                event.canceled = true
+                event.pressed = false
+                event.windowId = windowId
+                Input.parseInputEvent(event)
+            }
+        }
     }
     
     public override func removeFromSuperview() {
         displayLink?.invalidate()
         displayLink = nil
+        stopNativeIOSRendering()
+        nativeIOSViewController?.view.removeFromSuperview()
         unregisterCallbacks()
         super.removeFromSuperview()
     }
@@ -335,25 +455,191 @@ public class UIGodotAppView: UIView {
         if superview == nil {
             return
         }
-        if renderingLayer == nil {
+        if renderingLayer == nil && usesEmbeddedDisplayDriver {
             commonInit()
+        }
+        if usesEmbeddedDisplayDriver {
+            updateRenderingLayerGeometry()
+        } else {
+            attachNativeIOSContainerIfNeeded()
+            layoutNativeIOSContainer()
         }
         startGodotInstance()
     }
 
     @objc
     func iterate() {
-        if let app, (app.isPaused || !app.isDrawing) {
+        guard let app else { return }
+
+        if usesEmbeddedDisplayDriver {
+            if app.isPaused || !app.isDrawing {
+                return
+            }
+            if let instance = app.instance, instance.isStarted() {
+                _ = instance.iteration()
+                app.pollBridgeAndReadiness()
+            }
             return
         }
-        if let instance = app?.instance, instance.isStarted() {
-            instance.iteration()
-            app?.pollBridgeAndReadiness()
-        }
+
+        syncNativeIOSRenderingState()
+        app.pollBridgeAndReadiness()
     }
 }
 
 private extension UIGodotAppView {
+    var usesEmbeddedDisplayDriver: Bool {
+        app?.displayDriver == "embedded"
+    }
+
+    func updateRenderingLayerGeometry() {
+        guard let renderingLayer else { return }
+        renderingLayer.frame = bounds
+        let scale = max(window?.screen.scale ?? contentScaleFactor, CGFloat(1))
+        renderingLayer.contentsScale = scale
+        renderingLayer.drawableSize = CGSize(
+            width: max(CGFloat(1), bounds.size.width * scale),
+            height: max(CGFloat(1), bounds.size.height * scale)
+        )
+    }
+
+    func pixelSize() -> Vector2i {
+        if let renderingLayer {
+            return Vector2i(
+                x: Int32(max(CGFloat(1), renderingLayer.drawableSize.width).rounded()),
+                y: Int32(max(CGFloat(1), renderingLayer.drawableSize.height).rounded())
+            )
+        }
+        return Vector2i(
+            x: Int32(self.bounds.size.width * self.contentScaleFactor),
+            y: Int32(self.bounds.size.height * self.contentScaleFactor)
+        )
+    }
+
+    func scaledVector(from point: CGPoint, scale: CGFloat) -> Vector2 {
+        Vector2(x: Float(point.x * scale), y: Float(point.y * scale))
+    }
+
+    func currentMainWindow() -> Window? {
+        guard let sceneTree = Engine.getMainLoop() as? SceneTree else {
+            return nil
+        }
+        return sceneTree.root
+    }
+
+    func currentWindowId() -> Int {
+        if let window = currentMainWindow() {
+            return Int(window.getWindowId())
+        }
+        return Int(DisplayServer.mainWindowId)
+    }
+
+    func attachNativeIOSContainerIfNeeded() {
+        guard !usesEmbeddedDisplayDriver else { return }
+        guard let controller = nativeIOSViewController ?? makeNativeIOSViewController() else { return }
+
+        if !didRegisterNativeIOSViewController {
+            registerNativeIOSViewController(controller)
+            didRegisterNativeIOSViewController = true
+        }
+
+        let controllerView = controller.view!
+        controllerView.backgroundColor = .black
+        controllerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        if controllerView.superview !== self {
+            insertSubview(controllerView, at: 0)
+        }
+
+        layoutNativeIOSContainer()
+    }
+
+    func layoutNativeIOSContainer() {
+        guard !usesEmbeddedDisplayDriver else { return }
+        guard let controllerView = nativeIOSViewController?.view else { return }
+        controllerView.frame = bounds
+        controllerView.setNeedsLayout()
+        controllerView.layoutIfNeeded()
+    }
+
+    func makeNativeIOSViewController() -> UIViewController? {
+        guard let viewControllerType = NSClassFromString("GDTViewController") as? NSObject.Type else {
+            emitNativeIOSHostWarning("GDTViewController runtime class is unavailable")
+            return nil
+        }
+
+        let object = viewControllerType.init()
+        guard let controller = object as? UIViewController else {
+            emitNativeIOSHostWarning("GDTViewController resolved, but did not bridge to UIViewController")
+            return nil
+        }
+        controller.loadViewIfNeeded()
+        nativeIOSViewController = controller
+        return controller
+    }
+
+    func registerNativeIOSViewController(_ controller: UIViewController) {
+        guard let serviceClass = NSClassFromString("GDTAppDelegateService") else {
+            emitNativeIOSHostWarning("GDTAppDelegateService runtime class is unavailable")
+            return
+        }
+
+        let selector = NSSelectorFromString("setViewController:")
+        let serviceObject: AnyObject = serviceClass
+        guard serviceObject.responds(to: selector) else {
+            emitNativeIOSHostWarning("GDTAppDelegateService.setViewController: is unavailable")
+            return
+        }
+
+        _ = serviceObject.perform(selector, with: controller)
+    }
+
+    func syncNativeIOSRenderingState() {
+        guard !usesEmbeddedDisplayDriver else { return }
+        attachNativeIOSContainerIfNeeded()
+
+        let hasDrawableBounds = bounds.width > 1 && bounds.height > 1
+        if !hasDrawableBounds {
+            stopNativeIOSRendering()
+            return
+        }
+
+        if let app, app.isPaused || !app.isDrawing {
+            stopNativeIOSRendering()
+        } else {
+            startNativeIOSRendering()
+        }
+    }
+
+    func startNativeIOSRendering() {
+        guard !nativeIOSRenderingStarted else { return }
+        guard let hostView = nativeIOSViewController?.view else { return }
+
+        let startSelector = NSSelectorFromString("startRendering")
+        let hostObject: AnyObject = hostView
+        guard hostObject.responds(to: startSelector) else {
+            emitNativeIOSHostWarning("GDTView.startRendering is unavailable")
+            return
+        }
+
+        _ = hostObject.perform(startSelector)
+        nativeIOSRenderingStarted = true
+    }
+
+    func stopNativeIOSRendering() {
+        guard nativeIOSRenderingStarted else { return }
+        guard let hostView = nativeIOSViewController?.view else {
+            nativeIOSRenderingStarted = false
+            return
+        }
+
+        let stopSelector = NSSelectorFromString("stopRendering")
+        let hostObject: AnyObject = hostView
+        if hostObject.responds(to: stopSelector) {
+            _ = hostObject.perform(stopSelector)
+        }
+        nativeIOSRenderingStarted = false
+    }
+
     func emitDisplayServerNotEmbeddedWarning(context: String) {
         guard !didEmitDisplayServerNotEmbeddedWarning else { return }
         didEmitDisplayServerNotEmbeddedWarning = true
@@ -367,6 +653,12 @@ private extension UIGodotAppView {
                 )
             )
         )
+    }
+
+    func emitNativeIOSHostWarning(_ detail: String) {
+        guard !didEmitNativeIOSHostWarning else { return }
+        didEmitNativeIOSHostWarning = true
+        Logger.App.error("\(detail, privacy: .public)")
     }
 
     func syncCallbackRegistration() {
