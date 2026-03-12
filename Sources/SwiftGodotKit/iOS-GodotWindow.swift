@@ -64,15 +64,15 @@ public class UIGodotWindow: UIView {
         let windowLayer = CAMetalLayer()
         let size = max(UIScreen.main.bounds.size.width, UIScreen.main.bounds.size.height)
         windowLayer.frame.size = CGSize(width: size, height: size)
+        windowLayer.contentsScale = self.contentScaleFactor
         windowLayer.backgroundColor = CGColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0)
         layer.addSublayer(windowLayer)
         self.windowLayer = windowLayer
-        updateWindowLayerGeometry()
     }
     
     public override var bounds: CGRect {
         didSet {
-            updateWindowLayerGeometry()
+            windowLayer?.frame = self.bounds
             resizeWindow()
         }
     }
@@ -237,19 +237,12 @@ public class UIGodotWindow: UIView {
     
     func resizeWindow() {
         if let embedded, let subwindow, inited, isBoundWindowAlive() {
-            let scale = max(window?.screen.scale ?? contentScaleFactor, CGFloat(1))
-            embedded.resizeWindow(
-                size: Vector2i(
-                    x: Int32(max(CGFloat(1), bounds.size.width * scale).rounded()),
-                    y: Int32(max(CGFloat(1), bounds.size.height * scale).rounded())
-                ),
-                id: subwindow.getWindowId()
-            )
+            embedded.resizeWindow(size: Vector2i(x: Int32(self.bounds.size.width * self.contentScaleFactor), y: Int32(self.bounds.size.height * self.contentScaleFactor)), id: subwindow.getWindowId())
         }
     }
     
     public override func layoutSubviews() {
-        updateWindowLayerGeometry()
+        self.windowLayer?.frame = self.bounds
         initGodotWindow()
         if inited {
             if embedded == nil {
@@ -267,7 +260,6 @@ public class UIGodotWindow: UIView {
         if windowLayer == nil {
             commonInit()
         }
-        updateWindowLayerGeometry()
         initGodotWindow()
     }
     
@@ -428,18 +420,6 @@ public class UIGodotWindow: UIView {
     private func windowInstanceId(_ window: Window) -> Int64 {
         Int64(bitPattern: UInt64(window.getInstanceId()))
     }
-
-    private func updateWindowLayerGeometry() {
-        guard let windowLayer else { return }
-        windowLayer.frame = bounds
-        let scale = max(window?.screen.scale ?? contentScaleFactor, CGFloat(1))
-        windowLayer.contentsScale = scale
-        windowLayer.drawableSize = CGSize(
-            width: max(CGFloat(1), bounds.size.width * scale),
-            height: max(CGFloat(1), bounds.size.height * scale)
-        )
-    }
-
     private func isBoundWindowAlive() -> Bool {
         guard let boundWindowInstanceId else { return false }
         return GD.isInstanceIdValid(id: boundWindowInstanceId)

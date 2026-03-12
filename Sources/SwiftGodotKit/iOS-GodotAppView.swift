@@ -6,9 +6,9 @@
 import OSLog
 import SwiftUI
 import SwiftGodot
-import UIKit
-
 #if os(iOS)
+import UIKit
+#endif
 public struct GodotAppView: UIViewRepresentable {
     @SwiftUI.Environment(\.godotApp) var app: GodotApp?
     var view = UIGodotAppView(frame: CGRect.zero)
@@ -58,16 +58,6 @@ public struct GodotAppView: UIViewRepresentable {
         uiView.startGodotInstance()
     }
 
-    public func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIGodotAppView, context: Context) -> CGSize? {
-        let fallbackSize = uiView.window?.bounds.size
-            ?? uiView.superview?.bounds.size
-            ?? UIScreen.main.bounds.size
-        return CGSize(
-            width: proposal.width ?? fallbackSize.width,
-            height: proposal.height ?? fallbackSize.height
-        )
-    }
-
 }
 
 typealias TTGodotAppView = UIGodotAppView
@@ -100,13 +90,8 @@ public class UIGodotAppView: UIView {
         super.init(coder: coder)
     }
 
-    public override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
-    }
-    
     private func commonInit() {
         guard usesEmbeddedDisplayDriver else {
-            backgroundColor = .black
             return
         }
         let renderingLayer = CAMetalLayer()
@@ -249,40 +234,22 @@ public class UIGodotAppView: UIView {
             let tapCount = touch.tapCount
             touchData.append([ "touchId": touchId, "location": location, "tapCount": tapCount ])
         }
-        if app.displayDriver == "embedded" {
-            let windowId = Int32(DisplayServer.mainWindowId)
-            for touch in touchData {
-                guard let touchId = touch["touchId"] as? Int,
-                      let location = touch["location"] as? CGPoint,
-                      let tapCount = touch["tapCount"] as? Int,
-                      let displayServer = DisplayServer.shared as? DisplayServerEmbedded
-                else { continue }
-                
-                displayServer.touchPress (
-                    idx: Int32(touchId),
-                    x: Int32(location.x * contentsScale),
-                    y: Int32(location.y * contentsScale),
-                    pressed: true,
-                    doubleClick: tapCount > 1,
-                    window: windowId
-                )
-            }
-        } else {
-            let windowId = currentWindowId()
-            for touch in touchData {
-                guard let touchId = touch["touchId"] as? Int,
-                      let location = touch["location"] as? CGPoint,
-                      let tapCount = touch["tapCount"] as? Int
-                else { continue }
-
-                let event = InputEventScreenTouch()
-                event.index = Int32(touchId)
-                event.position = scaledVector(from: location, scale: contentsScale)
-                event.pressed = true
-                event.doubleTap = tapCount > 1
-                event.windowId = windowId
-                Input.parseInputEvent(event)
-            }
+        let windowId = Int32(DisplayServer.mainWindowId)
+        for touch in touchData {
+            guard let touchId = touch["touchId"] as? Int,
+                  let location = touch["location"] as? CGPoint,
+                  let tapCount = touch["tapCount"] as? Int,
+                  let displayServer = DisplayServer.shared as? DisplayServerEmbedded
+            else { continue }
+            
+            displayServer.touchPress (
+                idx: Int32(touchId),
+                x: Int32(location.x * contentsScale),
+                y: Int32(location.y * contentsScale),
+                pressed: true,
+                doubleClick: tapCount > 1,
+                window: windowId
+            )
         }
     }
     
@@ -315,44 +282,17 @@ public class UIGodotAppView: UIView {
             touchData.append([ "touchId": touchId, "location": location, "prevLocation": prevLocation, "alt": alt, "azim": azim, "force": force, "maximumPossibleForce": maximumPossibleForce ])
         }
         
-        if app.displayDriver == "embedded" {
-            let windowId = Int32(DisplayServer.mainWindowId)
-            for touch in touchData {
-                guard let touchId = touch["touchId"] as? Int,
-                      let location = touch["location"] as? CGPoint,
-                      let prevLocation = touch["prevLocation"] as? CGPoint,
-                      let alt = touch["alt"] as? CGFloat,
-                      let azim = touch["azim"] as? CGVector,
-                      let force = touch["force"] as? CGFloat,
-                      let maximumPossibleForce = touch["maximumPossibleForce"] as? CGFloat,
-                      let displayServer = DisplayServer.shared as? DisplayServerEmbedded else { continue }
-                displayServer.touchDrag(idx: Int32(touchId), prevX: Int32(prevLocation.x  * contentsScale), prevY: Int32(prevLocation.y  * contentsScale), x: Int32(location.x * contentsScale), y: Int32(location.y * contentsScale), pressure: Double(force) / Double(maximumPossibleForce), tilt: Vector2(x: Float(azim.dx) * Float(cos(alt)), y: Float(azim.dy) * cos(Float(alt))), window: windowId)
-            }
-        } else {
-            let windowId = currentWindowId()
-            for touch in touchData {
-                guard let touchId = touch["touchId"] as? Int,
-                      let location = touch["location"] as? CGPoint,
-                      let prevLocation = touch["prevLocation"] as? CGPoint,
-                      let alt = touch["alt"] as? CGFloat,
-                      let azim = touch["azim"] as? CGVector,
-                      let force = touch["force"] as? CGFloat,
-                      let maximumPossibleForce = touch["maximumPossibleForce"] as? CGFloat else { continue }
-
-                let relative = CGPoint(x: location.x - prevLocation.x, y: location.y - prevLocation.y)
-                let scaledRelative = scaledVector(from: relative, scale: contentsScale)
-                let drag = InputEventScreenDrag()
-                drag.index = Int32(touchId)
-                drag.position = scaledVector(from: location, scale: contentsScale)
-                drag.relative = scaledRelative
-                drag.screenRelative = scaledRelative
-                drag.velocity = scaledRelative
-                drag.screenVelocity = scaledRelative
-                drag.pressure = maximumPossibleForce > 0 ? Double(force) / Double(maximumPossibleForce) : 1
-                drag.tilt = Vector2(x: Float(azim.dx) * Float(cos(alt)), y: Float(azim.dy) * cos(Float(alt)))
-                drag.windowId = windowId
-                Input.parseInputEvent(drag)
-            }
+        let windowId = Int32(DisplayServer.mainWindowId)
+        for touch in touchData {
+            guard let touchId = touch["touchId"] as? Int,
+                  let location = touch["location"] as? CGPoint,
+                  let prevLocation = touch["prevLocation"] as? CGPoint,
+                  let alt = touch["alt"] as? CGFloat,
+                  let azim = touch["azim"] as? CGVector,
+                  let force = touch["force"] as? CGFloat,
+                  let maximumPossibleForce = touch["maximumPossibleForce"] as? CGFloat,
+                  let displayServer = DisplayServer.shared as? DisplayServerEmbedded else { continue }
+            displayServer.touchDrag(idx: Int32(touchId), prevX: Int32(prevLocation.x  * contentsScale), prevY: Int32(prevLocation.y  * contentsScale), x: Int32(location.x * contentsScale), y: Int32(location.y * contentsScale), pressure: Double(force) / Double(maximumPossibleForce), tilt: Vector2(x: Float(azim.dx) * Float(cos(alt)), y: Float(azim.dy) * cos(Float(alt))), window: windowId)
         }
     }
 
@@ -376,34 +316,19 @@ public class UIGodotAppView: UIView {
             touchData.append([ "touchId": touchId, "location": location ])
         }
         
-        if app.displayDriver == "embedded" {
-            let windowId = Int32(DisplayServer.mainWindowId)
-            for touch in touchData {
-                guard let touchId = touch["touchId"] as? Int,
-                      let location = touch["location"] as? CGPoint,
-                      let displayServer = DisplayServer.shared as? DisplayServerEmbedded else { continue }
-                displayServer.touchPress (
-                    idx: Int32(touchId),
-                    x: Int32(location.x * contentsScale),
-                    y: Int32(location.y * contentsScale),
-                    pressed: false,
-                    doubleClick: false,
-                    window: windowId
-                )
-            }
-        } else {
-            let windowId = currentWindowId()
-            for touch in touchData {
-                guard let touchId = touch["touchId"] as? Int,
-                      let location = touch["location"] as? CGPoint else { continue }
-
-                let event = InputEventScreenTouch()
-                event.index = Int32(touchId)
-                event.position = scaledVector(from: location, scale: contentsScale)
-                event.pressed = false
-                event.windowId = windowId
-                Input.parseInputEvent(event)
-            }
+        let windowId = Int32(DisplayServer.mainWindowId)
+        for touch in touchData {
+            guard let touchId = touch["touchId"] as? Int,
+                  let location = touch["location"] as? CGPoint,
+                  let displayServer = DisplayServer.shared as? DisplayServerEmbedded else { continue }
+            displayServer.touchPress (
+                idx: Int32(touchId),
+                x: Int32(location.x * contentsScale),
+                y: Int32(location.y * contentsScale),
+                pressed: false,
+                doubleClick: false,
+                window: windowId
+            )
         }
     }
     
@@ -419,26 +344,12 @@ public class UIGodotAppView: UIView {
             touchData.append([ "touchId": touchId ])
         }
         
-        if app.displayDriver == "embedded" {
-            let windowId = Int32(DisplayServer.mainWindowId)
-            for touch in touchData {
-                guard let touchId = touch["touchId"] as? Int,
-                      let displayServer = DisplayServer.shared as? DisplayServerEmbedded else { continue }
-                
-                displayServer.touchesCanceled(idx: Int32(touchId), window: windowId)
-            }
-        } else {
-            let windowId = currentWindowId()
-            for touch in touchData {
-                guard let touchId = touch["touchId"] as? Int else { continue }
-
-                let event = InputEventScreenTouch()
-                event.index = Int32(touchId)
-                event.canceled = true
-                event.pressed = false
-                event.windowId = windowId
-                Input.parseInputEvent(event)
-            }
+        let windowId = Int32(DisplayServer.mainWindowId)
+        for touch in touchData {
+            guard let touchId = touch["touchId"] as? Int,
+                  let displayServer = DisplayServer.shared as? DisplayServerEmbedded else { continue }
+            
+            displayServer.touchesCanceled(idx: Int32(touchId), window: windowId)
         }
     }
     
@@ -518,24 +429,6 @@ private extension UIGodotAppView {
         )
     }
 
-    func scaledVector(from point: CGPoint, scale: CGFloat) -> Vector2 {
-        Vector2(x: Float(point.x * scale), y: Float(point.y * scale))
-    }
-
-    func currentMainWindow() -> Window? {
-        guard let sceneTree = Engine.getMainLoop() as? SceneTree else {
-            return nil
-        }
-        return sceneTree.root
-    }
-
-    func currentWindowId() -> Int {
-        if let window = currentMainWindow() {
-            return Int(window.getWindowId())
-        }
-        return Int(DisplayServer.mainWindowId)
-    }
-
     func attachNativeIOSContainerIfNeeded() {
         guard !usesEmbeddedDisplayDriver else { return }
         guard let controller = nativeIOSViewController ?? makeNativeIOSViewController() else { return }
@@ -546,8 +439,6 @@ private extension UIGodotAppView {
         }
 
         let controllerView = controller.view!
-        controllerView.backgroundColor = .black
-        controllerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         if controllerView.superview !== self {
             insertSubview(controllerView, at: 0)
         }
