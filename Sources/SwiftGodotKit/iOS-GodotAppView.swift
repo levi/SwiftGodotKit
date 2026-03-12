@@ -582,4 +582,3 @@ private extension UIGodotAppView {
         callbackApp = nil
     }
 }
-#endif
