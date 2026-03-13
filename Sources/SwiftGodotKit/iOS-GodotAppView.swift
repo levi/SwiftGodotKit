@@ -3,12 +3,13 @@
 //
 //
 
+#if os(iOS)
+
 import OSLog
 import SwiftUI
 import SwiftGodot
-#if os(iOS)
 import UIKit
-#endif
+
 public struct GodotAppView: UIViewRepresentable {
     @SwiftUI.Environment(\.godotApp) var app: GodotApp?
     var view = UIGodotAppView(frame: CGRect.zero)
@@ -582,3 +583,5 @@ private extension UIGodotAppView {
         callbackApp = nil
     }
 }
+
+#endif

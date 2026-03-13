@@ -11,6 +11,7 @@ import SwiftGodot
 public class GodotView: NSView {
     static var keymap: [UInt16: Key] = initKeyMap()
     static var locationMap: [UInt16: KeyLocation] = initLocationMap()
+    public static var mouseMotionHandler: ((NSEvent) -> Void)?
     
     public var renderingLayer: CAMetalLayer? = nil
     internal var embedded: DisplayServerEmbedded?
@@ -131,6 +132,22 @@ public class GodotView: NSView {
         } else {
             processEvent(event: event, index: .left, pressed: false, outOfStream: false)
         }
+    }
+
+    override public func mouseMoved(with event: NSEvent) {
+        Self.mouseMotionHandler?(event)
+    }
+
+    override public func mouseDragged(with event: NSEvent) {
+        Self.mouseMotionHandler?(event)
+    }
+
+    override public func rightMouseDragged(with event: NSEvent) {
+        Self.mouseMotionHandler?(event)
+    }
+
+    override public func otherMouseDragged(with event: NSEvent) {
+        Self.mouseMotionHandler?(event)
     }
 
     func processEvent(event: NSEvent, index: MouseButton, pressed: Bool, outOfStream: Bool) {
