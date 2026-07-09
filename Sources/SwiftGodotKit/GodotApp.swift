@@ -208,17 +208,12 @@ public class GodotApp: ObservableObject {
             "--rendering-method", renderingMethod
         ])
         #if os(macOS)
-        let godotDisplayDriver = self.displayDriver
-        if godotDisplayDriver == "embedded" {
+        if self.displayDriver == "embedded" {
             args.append("--embedded")
         }
-        #elseif os(iOS)
-        let godotDisplayDriver = self.displayDriver == "embedded" ? "iOS" : self.displayDriver
-        #else
-        let godotDisplayDriver = self.displayDriver
         #endif
         args.append(contentsOf: [
-            "--display-driver", godotDisplayDriver
+            "--display-driver", self.displayDriver
         ])
         if let scene {
             args.append(scene)
