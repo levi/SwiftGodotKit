@@ -2,14 +2,14 @@
 import PackageDescription
 let macLibgodotTarget: Target = .binaryTarget(
     name: "mac_libgodot",
-    url: "https://github.com/migueldeicaza/godot/releases/download/v4.6.4/libgodot-macos.xcframework.zip",
-    checksum: "2d8c2aaa336fe7c0f621f390c88ce9efb735f6b3c715657c1f665d26134db3a4"
+    url: "https://github.com/iarafathsn/godot/releases/download/v4.7.1/libgodot-macos.xcframework.zip",
+    checksum: "bdb979a18bb49342550177a087dabbd9826ddbf47f04af062a66d23a36501fb8"
 )
 
 let iosLibgodotTarget: Target = .binaryTarget(
     name: "ios_libgodot",
-    url: "https://github.com/migueldeicaza/godot/releases/download/v4.6.4/libgodot-ios.xcframework.zip",
-    checksum: "c7b945aae1e02eabafa6578930e1ab3ac17cd1f8665ad3af4482447646d200c1"
+    url: "https://github.com/iarafathsn/godot/releases/download/v4.7.1/libgodot-ios.xcframework.zip",
+    checksum: "9018de5143c3d71648ee08a7189a3762c4780cf9ab8d4e8f9221ffa39e4e70d0"
 )
 
 let package = Package(
