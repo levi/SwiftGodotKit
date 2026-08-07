@@ -35,6 +35,13 @@ public struct GodotWarningEvent {
         case runOnGodotThreadBeforeInstance
         case windowNativeSurfaceUnsupported
         case displayServerNotEmbedded
+        /// The frame loop went quiet for longer than `NSGodotAppView.stallGrace`
+        /// and the watchdog had to drive it. A ride running under this is a ride
+        /// whose clock the host failed to keep, so it is reported rather than
+        /// silently absorbed.
+        case frameLoopStalled
+        /// …and it started ticking on its own again.
+        case frameLoopRecovered
     }
 
     public let code: Code

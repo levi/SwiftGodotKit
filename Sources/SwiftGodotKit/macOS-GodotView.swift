@@ -48,11 +48,25 @@ public class GodotView: NSView {
         DisplayServer.mainWindowId
     }
     
-    public override var bounds: CGRect {
-        didSet {
-            updateRenderingLayerGeometry()
-            resizeWindow()
-        }
+    /// AppKit resizes a view through `setFrameSize(_:)`, not by assigning to
+    /// `bounds`, so the `bounds { didSet }` observer this class used to rely on
+    /// never fired even once — verified with a standalone AppKit probe, where a
+    /// window resize and a direct `frame =` both logged `setFrameSize` and never
+    /// the observer. That is why the render surface could sit at a size nobody
+    /// had asked for since launch.
+    public override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateRenderingLayerGeometry()
+        resizeWindow()
+    }
+
+    /// Moving between a Retina and a non-Retina display changes the scale that
+    /// `resizeWindow` multiplies by. It used to be read once, at `commonInit`,
+    /// from `NSScreen.main` while `window` was still nil.
+    public override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateRenderingLayerGeometry()
+        resizeWindow()
     }
 
     public override func viewDidMoveToWindow() {
@@ -61,12 +75,21 @@ public class GodotView: NSView {
         resizeWindow()
     }
 
+    /// The size, in pixels, the embedded engine's window should be: this view,
+    /// at this view's backing scale.
+    var desiredSurfaceSize: Vector2i {
+        let scale = renderingLayer?.contentsScale ?? window?.backingScaleFactor ?? 1.0
+        return Vector2i(
+            x: Int32(max(1, self.bounds.size.width * scale)),
+            y: Int32(max(1, self.bounds.size.height * scale))
+        )
+    }
+
     func resizeWindow() {
         guard let embedded else { return }
-        let scale = renderingLayer?.contentsScale ?? 1.0
-        let pixelWidth = Int32(max(1, self.bounds.size.width * scale))
-        let pixelHeight = Int32(max(1, self.bounds.size.height * scale))
-        let size = Vector2i(x: pixelWidth, y: pixelHeight)
+        let size = desiredSurfaceSize
+        let pixelWidth = size.x
+        let pixelHeight = size.y
         if lastResizeSize != size {
             print("[SwiftGodotKit] resizeWindow id=\(windowId) size=\(pixelWidth)x\(pixelHeight)")
             if let data = ("[SwiftGodotKit] resizeWindow id=\(windowId) size=\(pixelWidth)x\(pixelHeight)\n").data(using: .utf8) {
@@ -181,16 +204,17 @@ public class GodotView: NSView {
 
 }
 
-private extension GodotView {
+extension GodotView {
     func updateRenderingLayerGeometry() {
         guard let renderingLayer else { return }
         renderingLayer.frame = bounds
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0
-        renderingLayer.contentsScale = scale
-        renderingLayer.drawableSize = CGSize(
-            width: max(1, bounds.size.width * scale),
-            height: max(1, bounds.size.height * scale)
-        )
+        renderingLayer.contentsScale = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor ?? 1.0
+        // `drawableSize` is deliberately NOT set here. The embedded display
+        // server drives it from the size it is given, and a CAMetalLayer stops
+        // deriving its drawable from bounds × contentsScale the moment anyone
+        // assigns one explicitly — which is how this class used to bind the
+        // native surface at 1×1 px from `commonInit`, at `frame: .zero`.
     }
 }
 
