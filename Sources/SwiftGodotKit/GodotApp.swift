@@ -278,7 +278,32 @@ public class GodotApp: ObservableObject {
     // suppressing App Nap is the whole point and keeping the display awake is
     // not this layer's business.
 
-    private var backgroundActivity: NSObjectProtocol?
+    /// `@ObservationIgnored` — and this one is not tidiness, IT IS THE FIX.
+    ///
+    /// This object goes into SwiftUI's environment as `\.godotApp`. Every one of
+    /// these three (`backgroundActivity`, `frameLoopTeardowns`,
+    /// `pausesOnResignActive`) was a stored `var` on an `@Observable` class, and
+    /// `frameLoopTeardowns` is written by `registerFrameLoopTeardown` — which
+    /// `startGodotInstance()` called, which `GodotAppView.updateNSView` called,
+    /// which is to say: an observable write performed from inside a SwiftUI
+    /// update pass, invalidating the pass that made it. One ordinary window
+    /// resize started it and nothing ever stopped it.
+    ///
+    /// MEASURED as a 2x2 — free ride at 1800x900, resized to 1400x800 thirty
+    /// seconds in by the harness itself, 25 s sampled either side:
+    ///
+    ///   marks off, `EngineBindingGuard` off   0.0 fps  45,271 startGodotInstance/s
+    ///                                         0.00 Hz samples, 8,287,905 calls,
+    ///                                         222 s of stall, never recovered
+    ///   marks ON,  guard off                 25.6 fps  0.0/s, 1.00 Hz, 5 calls
+    ///   marks off, guard ON                  24.2 fps  0.0/s, 1.00 Hz, 3 calls
+    ///   marks ON,  guard ON  (shipped)       alive in all eight window states
+    ///
+    /// Either half stops it and both are kept: the marks stop the pass dirtying
+    /// its own input, the guard stops the pass reaching the engine at all. None
+    /// of the three is anything a view should re-render for, and they were the
+    /// only stored `var`s on this class not already marked.
+    @ObservationIgnored private var backgroundActivity: NSObjectProtocol?
 
     private func beginBackgroundActivity() {
         #if os(macOS)
@@ -310,7 +335,7 @@ public class GodotApp: ObservableObject {
     // `mutex lock failed: Invalid argument` all come from that one pass.
     // Shutting the engine down while its globals are alive is the fix.
 
-    private var frameLoopTeardowns: [ObjectIdentifier: () -> Void] = [:]
+    @ObservationIgnored private var frameLoopTeardowns: [ObjectIdentifier: () -> Void] = [:]
 
     func registerFrameLoopTeardown(_ owner: AnyObject, _ teardown: @escaping () -> Void) {
         frameLoopTeardowns[ObjectIdentifier(owner)] = teardown
@@ -432,9 +457,9 @@ public class GodotApp: ObservableObject {
     /// `resume()` stay for the iOS background transitions, which are a genuine
     /// suspension.
     #if os(macOS)
-    public var pausesOnResignActive = false
+    @ObservationIgnored public var pausesOnResignActive = false
     #else
-    public var pausesOnResignActive = true
+    @ObservationIgnored public var pausesOnResignActive = true
     #endif
 
     func applicationDidBecomeActive() {
