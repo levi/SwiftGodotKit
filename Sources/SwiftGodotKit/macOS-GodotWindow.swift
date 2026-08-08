@@ -94,8 +94,12 @@ public class NSGodotWindow: GodotView {
         initGodotWindow()
         renderingLayer?.frame = self.bounds
         if inited {
-            if embedded == nil {
-                embedded = DisplayServer.shared as? DisplayServerEmbedded
+            if !hasEmbeddedDisplayServer {
+                if MacEmbeddedDisplayServer.isAvailable {
+                    macEmbeddedIsReady = true
+                } else {
+                    embedded = DisplayServer.shared as? DisplayServerEmbedded
+                }
             }
             resizeWindow ()
         }
@@ -105,6 +109,7 @@ public class NSGodotWindow: GodotView {
     public override func removeFromSuperview() {
         clearBinding(removeOwnedWindow: true)
         embedded = nil
+        macEmbeddedIsReady = false
         super.removeFromSuperview()
     }
 

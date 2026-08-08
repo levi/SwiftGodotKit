@@ -8,13 +8,55 @@ import Foundation
 import QuartzCore
 
 import SwiftGodot
+
+/// The 4.7 macOS libgodot fork registers its embedded driver as a platform
+/// class rather than the generated cross-platform `DisplayServerEmbedded`.
+/// Keep those runtime-only calls here so the rest of the host has one seam.
+enum MacEmbeddedDisplayServer {
+    static var isAvailable: Bool {
+        ClassDB.classExists(class: StringName("DisplayServerMacOSEmbedded"))
+    }
+
+    static func setNativeSurface(_ surface: RenderingNativeSurfaceApple) {
+        _ = ClassDB.classCallStatic(
+            class: StringName("DisplayServerMacOSEmbedded"),
+            method: StringName("set_native_surface"),
+            surface.toVariant()
+        )
+    }
+
+    @discardableResult
+    static func resizeWindow(size: Vector2i, id: Int32) -> Bool {
+        guard let singleton = ClassDB.classCallStatic(
+            class: StringName("DisplayServerMacOSEmbedded"),
+            method: StringName("get_singleton")
+        ) else { return false }
+        switch singleton.call(
+            method: StringName("resize_window"),
+            size.toVariant(),
+            id.toVariant()
+        ) {
+        case .success:
+            return true
+        case .failure:
+            return false
+        }
+    }
+}
+
 public class GodotView: NSView {
     static var keymap: [UInt16: Key] = initKeyMap()
     static var locationMap: [UInt16: KeyLocation] = initLocationMap()
+    public static var mouseMotionHandler: ((NSEvent) -> Void)?
     
     public var renderingLayer: CAMetalLayer? = nil
     internal var embedded: DisplayServerEmbedded?
+    internal var macEmbeddedIsReady = false
     private var lastResizeSize: Vector2i?
+
+    internal var hasEmbeddedDisplayServer: Bool {
+        macEmbeddedIsReady || embedded != nil
+    }
     
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -47,11 +89,25 @@ public class GodotView: NSView {
         DisplayServer.mainWindowId
     }
     
-    public override var bounds: CGRect {
-        didSet {
-            updateRenderingLayerGeometry()
-            resizeWindow()
-        }
+    /// AppKit resizes a view through `setFrameSize(_:)`, not by assigning to
+    /// `bounds`, so the `bounds { didSet }` observer this class used to rely on
+    /// never fired even once — verified with a standalone AppKit probe, where a
+    /// window resize and a direct `frame =` both logged `setFrameSize` and never
+    /// the observer. That is why the render surface could sit at a size nobody
+    /// had asked for since launch.
+    public override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateRenderingLayerGeometry()
+        resizeWindow()
+    }
+
+    /// Moving between a Retina and a non-Retina display changes the scale that
+    /// `resizeWindow` multiplies by. It used to be read once, at `commonInit`,
+    /// from `NSScreen.main` while `window` was still nil.
+    public override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateRenderingLayerGeometry()
+        resizeWindow()
     }
 
     public override func viewDidMoveToWindow() {
@@ -60,12 +116,21 @@ public class GodotView: NSView {
         resizeWindow()
     }
 
+    /// The size, in pixels, the embedded engine's window should be: this view,
+    /// at this view's backing scale.
+    var desiredSurfaceSize: Vector2i {
+        let scale = renderingLayer?.contentsScale ?? window?.backingScaleFactor ?? 1.0
+        return Vector2i(
+            x: Int32(max(1, self.bounds.size.width * scale)),
+            y: Int32(max(1, self.bounds.size.height * scale))
+        )
+    }
+
     func resizeWindow() {
-        guard let embedded else { return }
-        let scale = renderingLayer?.contentsScale ?? 1.0
-        let pixelWidth = Int32(max(1, self.bounds.size.width * scale))
-        let pixelHeight = Int32(max(1, self.bounds.size.height * scale))
-        let size = Vector2i(x: pixelWidth, y: pixelHeight)
+        guard hasEmbeddedDisplayServer else { return }
+        let size = desiredSurfaceSize
+        let pixelWidth = size.x
+        let pixelHeight = size.y
         if lastResizeSize != size {
             print("[SwiftGodotKit] resizeWindow id=\(windowId) size=\(pixelWidth)x\(pixelHeight)")
             if let data = ("[SwiftGodotKit] resizeWindow id=\(windowId) size=\(pixelWidth)x\(pixelHeight)\n").data(using: .utf8) {
@@ -74,10 +139,11 @@ public class GodotView: NSView {
             lastResizeSize = size
         }
 
-        embedded.resizeWindow(
-            size: size,
-            id: Int32(windowId)
-        )
+        if macEmbeddedIsReady {
+            _ = MacEmbeddedDisplayServer.resizeWindow(size: size, id: Int32(windowId))
+        } else {
+            embedded?.resizeWindow(size: size, id: Int32(windowId))
+        }
     }
 
     public override var acceptsFirstResponder: Bool {
@@ -133,6 +199,22 @@ public class GodotView: NSView {
         }
     }
 
+    override public func mouseMoved(with event: NSEvent) {
+        Self.mouseMotionHandler?(event)
+    }
+
+    override public func mouseDragged(with event: NSEvent) {
+        Self.mouseMotionHandler?(event)
+    }
+
+    override public func rightMouseDragged(with event: NSEvent) {
+        Self.mouseMotionHandler?(event)
+    }
+
+    override public func otherMouseDragged(with event: NSEvent) {
+        Self.mouseMotionHandler?(event)
+    }
+
     func processEvent(event: NSEvent, index: MouseButton, pressed: Bool, outOfStream: Bool) {
         let mb = InputEventMouseButton()
         mb.windowId = windowId
@@ -164,16 +246,12 @@ public class GodotView: NSView {
 
 }
 
-private extension GodotView {
+extension GodotView {
     func updateRenderingLayerGeometry() {
         guard let renderingLayer else { return }
         renderingLayer.frame = bounds
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0
-        renderingLayer.contentsScale = scale
-        renderingLayer.drawableSize = CGSize(
-            width: max(1, bounds.size.width * scale),
-            height: max(1, bounds.size.height * scale)
-        )
+        renderingLayer.contentsScale = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor ?? 1.0
     }
 }
 

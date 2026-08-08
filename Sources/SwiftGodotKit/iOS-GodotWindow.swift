@@ -420,7 +420,6 @@ public class UIGodotWindow: UIView {
     private func windowInstanceId(_ window: Window) -> Int64 {
         Int64(bitPattern: UInt64(window.getInstanceId()))
     }
-
     private func isBoundWindowAlive() -> Bool {
         guard let boundWindowInstanceId else { return false }
         return GD.isInstanceIdValid(id: boundWindowInstanceId)

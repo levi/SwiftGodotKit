@@ -240,7 +240,9 @@ public class GodotApp: ObservableObject {
         }
         isPaused = false
         Logger.App.info("GodotApp.start created instance. isStarted=\(instance.isStarted())")
-        
+
+        beginBackgroundActivity()
+
 #if os(macOS)
         NSApplication.shared.delegate = appDelegate
 #endif
@@ -252,6 +254,8 @@ public class GodotApp: ObservableObject {
     }
 
     public func stop() {
+        stopFrameLoops()
+        endBackgroundActivity()
         guard let instance else { return }
         Logger.App.info("GodotApp.stop destroying GodotInstance")
         if hostBridge != nil {
@@ -262,6 +266,91 @@ public class GodotApp: ObservableObject {
         self.hostBridge = nil
         isPaused = false
         isDrawing = true
+    }
+
+    // MARK: - App Nap
+    //
+    // A backgrounded process is a candidate for App Nap, which throttles timers
+    // and run-loop wakeups — the two things the frame loop is made of. The
+    // scripted harness already held one of these for exactly this reason
+    // (`ScriptedSessionHarness`); the interactive app held nothing. It is
+    // `userInitiatedAllowingIdleSystemSleep` rather than `userInitiated` because
+    // suppressing App Nap is the whole point and keeping the display awake is
+    // not this layer's business.
+
+    /// `@ObservationIgnored` — and this one is not tidiness, IT IS THE FIX.
+    ///
+    /// This object goes into SwiftUI's environment as `\.godotApp`. Every one of
+    /// these three (`backgroundActivity`, `frameLoopTeardowns`,
+    /// `pausesOnResignActive`) was a stored `var` on an `@Observable` class, and
+    /// `frameLoopTeardowns` is written by `registerFrameLoopTeardown` — which
+    /// `startGodotInstance()` called, which `GodotAppView.updateNSView` called,
+    /// which is to say: an observable write performed from inside a SwiftUI
+    /// update pass, invalidating the pass that made it. One ordinary window
+    /// resize started it and nothing ever stopped it.
+    ///
+    /// MEASURED as a 2x2 — free ride at 1800x900, resized to 1400x800 thirty
+    /// seconds in by the harness itself, 25 s sampled either side:
+    ///
+    ///   marks off, `EngineBindingGuard` off   0.0 fps  45,271 startGodotInstance/s
+    ///                                         0.00 Hz samples, 8,287,905 calls,
+    ///                                         222 s of stall, never recovered
+    ///   marks ON,  guard off                 25.6 fps  0.0/s, 1.00 Hz, 5 calls
+    ///   marks off, guard ON                  24.2 fps  0.0/s, 1.00 Hz, 3 calls
+    ///   marks ON,  guard ON  (shipped)       alive in all eight window states
+    ///
+    /// Either half stops it and both are kept: the marks stop the pass dirtying
+    /// its own input, the guard stops the pass reaching the engine at all. None
+    /// of the three is anything a view should re-render for, and they were the
+    /// only stored `var`s on this class not already marked.
+    @ObservationIgnored private var backgroundActivity: NSObjectProtocol?
+
+    private func beginBackgroundActivity() {
+        #if os(macOS)
+        guard backgroundActivity == nil else { return }
+        backgroundActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "Godot frame loop"
+        )
+        #endif
+    }
+
+    private func endBackgroundActivity() {
+        #if os(macOS)
+        if let backgroundActivity {
+            ProcessInfo.processInfo.endActivity(backgroundActivity)
+        }
+        backgroundActivity = nil
+        #endif
+    }
+
+    // MARK: - frame-loop teardown
+    //
+    // Nothing used to call `stop()`, and the display link was never invalidated,
+    // so the process reached `exit()` with a live engine still iterating under
+    // it. C++ static destructors then race: Godot's StringName mutex is
+    // destroyed before its StringName table, the last `unref` locks a dead mutex,
+    // and `std::terminate` aborts — the `Unreferenced static string` wall, the
+    // `Pages in use exist at exit in PagedAllocator`, and the
+    // `mutex lock failed: Invalid argument` all come from that one pass.
+    // Shutting the engine down while its globals are alive is the fix.
+
+    @ObservationIgnored private var frameLoopTeardowns: [ObjectIdentifier: () -> Void] = [:]
+
+    func registerFrameLoopTeardown(_ owner: AnyObject, _ teardown: @escaping () -> Void) {
+        frameLoopTeardowns[ObjectIdentifier(owner)] = teardown
+    }
+
+    private func stopFrameLoops() {
+        let teardowns = frameLoopTeardowns.values
+        frameLoopTeardowns.removeAll()
+        for teardown in teardowns { teardown() }
+    }
+
+    /// Stop the frame loop and destroy the engine, in that order. Safe to call
+    /// more than once.
+    public func shutdown() {
+        stop()
     }
 
     public func pause() {
@@ -359,15 +448,36 @@ public class GodotApp: ObservableObject {
     }
     #endif
 
+    /// Whether losing foreground activation suspends the engine.
+    ///
+    /// TRUE ON iOS, where resigning active really is the system taking the app
+    /// away. FALSE ON macOS, where it means somebody clicked another window —
+    /// and suspending a training app's clock because its window is not frontmost
+    /// is the difference between a ride and a corrupted ride. `pause()` and
+    /// `resume()` stay for the iOS background transitions, which are a genuine
+    /// suspension.
+    #if os(macOS)
+    @ObservationIgnored public var pausesOnResignActive = false
+    #else
+    @ObservationIgnored public var pausesOnResignActive = true
+    #endif
+
     func applicationDidBecomeActive() {
-        instance?.focusIn()
-        resume()
+        if pausesOnResignActive {
+            resume()
+        }
+        // FOCUS_IN once, not twice: `setApplicationFocus` posts exactly the
+        // notification `instance.focusIn()` posts, and sending both made every
+        // focus change arrive at the game as a pair.
         setApplicationFocus(true)
     }
 
     func applicationDidResignActive() {
-        instance?.focusOut()
-        pause()
+        if pausesOnResignActive {
+            pause()
+        }
+        // The engine still wants FOCUS_OUT — held keys have to release — it just
+        // must not stop iterating.
         setApplicationFocus(false)
     }
 
