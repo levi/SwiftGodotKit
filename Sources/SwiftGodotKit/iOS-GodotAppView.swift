@@ -15,17 +15,23 @@ public struct GodotAppView: UIViewRepresentable {
     var view = UIGodotAppView(frame: CGRect.zero)
     let source: String?
     let scene: String?
+    let renderBudget: RenderBudget
+    let frameRate: FrameRateRequest
     let onReady: ((GodotAppViewHandle) -> Void)?
     let onMessage: ((VariantDictionary) -> Void)?
-    
+
     public init(
         source: String? = nil,
         scene: String? = nil,
+        renderBudget: RenderBudget = .native,
+        frameRate: FrameRateRequest = .free,
         onReady: ((GodotAppViewHandle) -> Void)? = nil,
         onMessage: ((VariantDictionary) -> Void)? = nil
     ) {
         self.source = source
         self.scene = scene
+        self.renderBudget = renderBudget
+        self.frameRate = frameRate
         self.onReady = onReady
         self.onMessage = onMessage
     }
@@ -43,6 +49,8 @@ public struct GodotAppView: UIViewRepresentable {
         view.app = app
         view.source = source
         view.scene = scene
+        view.renderBudget = renderBudget
+        view.frameRate = frameRate
         view.onReady = onReady
         view.onMessage = onMessage
         view.syncCallbackRegistration()
@@ -53,6 +61,8 @@ public struct GodotAppView: UIViewRepresentable {
         app?.configureLaunch(source: source, scene: scene)
         uiView.source = source
         uiView.scene = scene
+        uiView.renderBudget = renderBudget
+        uiView.frameRate = frameRate
         uiView.onReady = onReady
         uiView.onMessage = onMessage
         uiView.syncCallbackRegistration()
@@ -60,9 +70,6 @@ public struct GodotAppView: UIViewRepresentable {
     }
 
 }
-
-typealias TTGodotAppView = UIGodotAppView
-typealias TTGodotWindow = UIGodotWindow
 
 /// WHAT THE HOST SIDE OF A FRAME COSTS, AND WHAT SHAPE IT IS DRAWING INTO.
 ///
@@ -83,6 +90,9 @@ enum HostProbe {
         fflush(stdout)
     }
 }
+
+typealias TTGodotAppView = UIGodotAppView
+typealias TTGodotWindow = UIGodotWindow
 
 public class UIGodotAppView: UIView {
     public var renderingLayer: CAMetalLayer? = nil
@@ -113,6 +123,23 @@ public class UIGodotAppView: UIView {
     public var app: GodotApp?
     public var source: String?
     public var scene: String?
+    /// See `RenderBudget`. Re-applied whenever the view lays out, so a rotation
+    /// re-derives it from the new bounds rather than keeping the old drawable.
+    public var renderBudget: RenderBudget = .native {
+        didSet {
+            guard renderBudget != oldValue, usesEmbeddedDisplayDriver else { return }
+            updateRenderingLayerGeometry()
+            if embedded != nil { resizeWindow() }
+        }
+    }
+    /// See `FrameRateRequest`. Applied to the display link as soon as there is
+    /// one, and again whenever it changes.
+    public var frameRate: FrameRateRequest = .free {
+        didSet {
+            guard frameRate != oldValue else { return }
+            applyFrameRate()
+        }
+    }
     public var onReady: ((GodotAppViewHandle) -> Void)?
     public var onMessage: ((VariantDictionary) -> Void)?
 
@@ -242,6 +269,7 @@ public class UIGodotAppView: UIView {
                 let displayLink = CADisplayLink(target: self, selector: #selector(iterate))
                 displayLink.add(to: .current, forMode: RunLoop.Mode.default)
                 self.displayLink = displayLink
+                applyFrameRate()
             }
 
             if usesEmbeddedDisplayDriver, embedded == nil {
@@ -525,13 +553,38 @@ private extension UIGodotAppView {
     func updateRenderingLayerGeometry() {
         guard let renderingLayer else { return }
         renderingLayer.frame = bounds
-        let scale = max(window?.screen.scale ?? contentScaleFactor, CGFloat(1))
+        let screen = max(window?.screen.scale ?? contentScaleFactor, CGFloat(1))
+        // The layer's `contentsScale` IS the render scale, not the screen's:
+        // touches are converted to engine pixels by multiplying by it (see
+        // `touchesBegan`), so the two have to be the same number or a tap lands
+        // somewhere else. The drawable is then composited up to `frame` by the
+        // display pipeline, which is where the saving comes from.
+        let scale = renderBudget.scale(forPointSize: bounds.size, screenScale: screen)
         renderingLayer.contentsScale = scale
         renderingLayer.drawableSize = CGSize(
             width: max(CGFloat(1), bounds.size.width * scale),
             height: max(CGFloat(1), bounds.size.height * scale)
         )
         probeGeometryChange("layer")
+    }
+
+    /// Ask CoreAnimation for the cadence, rather than sleeping inside the
+    /// frame. Godot's own `Engine.max_fps` throttles by delaying INSIDE
+    /// `iteration()`, which here is the display link's own callback — so it
+    /// would hold the main thread through the very vsync it was trying to skip.
+    /// A frame-rate range hands the decision to the compositor, which is the
+    /// only thing that knows when the next refresh is.
+    func applyFrameRate() {
+        guard let displayLink else { return }
+        switch frameRate {
+        case .free:
+            displayLink.preferredFrameRateRange = .default
+        case let .range(minimum, preferred):
+            displayLink.preferredFrameRateRange = CAFrameRateRange(
+                minimum: Float(minimum), maximum: Float(preferred), preferred: Float(preferred)
+            )
+        }
+        HostProbe.say("frame rate -> \(displayLink.preferredFrameRateRange)")
     }
 
     func pixelSize() -> Vector2i {
