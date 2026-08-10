@@ -10,9 +10,31 @@ import SwiftUI
 import SwiftGodot
 import UIKit
 
+/// The embedded display server retains an unowned pointer to the rendering
+/// layer. SwiftUI may recreate `GodotAppView` values as routes come and go, but
+/// one running `GodotApp` must therefore keep one UIKit host (and one layer).
+@MainActor
+private final class GodotAppViewStore {
+    static let shared = GodotAppViewStore()
+
+    private let views = NSMapTable<GodotApp, UIGodotAppView>(
+        keyOptions: .weakMemory,
+        valueOptions: .strongMemory
+    )
+
+    func view(for app: GodotApp) -> UIGodotAppView {
+        if let view = views.object(forKey: app) {
+            return view
+        }
+
+        let view = UIGodotAppView(frame: .zero)
+        views.setObject(view, forKey: app)
+        return view
+    }
+}
+
 public struct GodotAppView: UIViewRepresentable {
     @SwiftUI.Environment(\.godotApp) var app: GodotApp?
-    var view = UIGodotAppView(frame: CGRect.zero)
     let source: String?
     let scene: String?
     let renderBudget: RenderBudget
@@ -39,9 +61,10 @@ public struct GodotAppView: UIViewRepresentable {
     public func makeUIView(context: Context) -> UIGodotAppView {
         guard let app else {
             Logger.App.error("No GodotApp instance, you must pass it on the environment using \\.godotApp")
-            return view
+            return UIGodotAppView(frame: .zero)
         }
 
+        let view = GodotAppViewStore.shared.view(for: app)
         app.configureLaunch(source: source, scene: scene)
         app.start()
         view.contentScaleFactor = UIScreen.main.scale
@@ -120,7 +143,7 @@ public class UIGodotAppView: UIView {
     private var nativeIOSRenderingStarted = false
     private var didRegisterNativeIOSViewController = false
     
-    public var app: GodotApp?
+    public weak var app: GodotApp?
     public var source: String?
     public var scene: String?
     /// See `RenderBudget`. Re-applied whenever the view lays out, so a rotation
