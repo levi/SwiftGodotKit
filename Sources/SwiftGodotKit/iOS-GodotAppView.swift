@@ -3,7 +3,7 @@
 //
 //
 
-#if os(iOS)
+#if os(iOS) || os(tvOS)
 
 import OSLog
 import SwiftUI
@@ -68,7 +68,9 @@ public struct GodotAppView: UIViewRepresentable {
         app.configureLaunch(source: source, scene: scene)
         app.start()
         view.contentScaleFactor = UIScreen.main.scale
+        #if os(iOS)
         view.isMultipleTouchEnabled = true
+        #endif
         view.app = app
         view.source = source
         view.scene = scene
@@ -314,6 +316,7 @@ public class UIGodotAppView: UIView {
         }
     }
 
+    #if os(iOS)
     public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let app, app.instance != nil, let renderingLayer else { return }
         let contentsScale = renderingLayer.contentsScale
@@ -451,6 +454,7 @@ public class UIGodotAppView: UIView {
             displayServer.touchesCanceled(idx: Int32(touchId), window: windowId)
         }
     }
+    #endif
     
     public override func removeFromSuperview() {
         displayLink?.invalidate()

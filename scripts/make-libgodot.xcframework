@@ -3,6 +3,7 @@ set -euo pipefail
 
 BUILD_ARTIFACTS=0
 CREATE_ZIPS=0
+TVOS_ONLY=0
 CONFIGURATION=release
 JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 8)"
 
@@ -13,11 +14,13 @@ usage: $0 [options] <SwiftGodot dir> <godot dir> <output dir>
 Build and/or package libgodot artifacts into xcframeworks under:
     <output dir>/mac/libgodot.xcframework
     <output dir>/ios/libgodot.xcframework
+    <output dir>/tvos/libgodot.xcframework
 
 Options:
     --build                  Build the Godot SCons artifacts before packaging.
     --configuration <mode>   release or debug. Defaults to release.
     --zip                    Also create SwiftPM payload zips and print checksums.
+    --tvos-only              Build and package only the tvOS payload.
     --jobs <count>           SCons parallelism when using --build. Defaults to CPU count.
     -h, --help               Show this help.
 
@@ -42,6 +45,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --zip)
             CREATE_ZIPS=1
+            shift
+            ;;
+        --tvos-only)
+            TVOS_ONLY=1
             shift
             ;;
         --jobs|-j)
@@ -78,6 +85,7 @@ fi
 
 SWIFTGODOT_DIR="$(cd "$1" && pwd)"
 GODOT_DIR="$(cd "$2" && pwd)"
+mkdir -p "$3"
 OUTPUT_DIR="$(cd "$3" && pwd)"
 
 case "$CONFIGURATION" in
@@ -99,6 +107,10 @@ IOS_X86_SIM_RELEASE_LIB="$GODOT_DIR/bin/libgodot.ios.template_release.x86_64.sim
 IOS_ARM_DEBUG_LIB="$GODOT_DIR/bin/libgodot.ios.template_debug.arm64.a"
 IOS_ARM_SIM_DEBUG_LIB="$GODOT_DIR/bin/libgodot.ios.template_debug.arm64.simulator.a"
 IOS_X86_SIM_DEBUG_LIB="$GODOT_DIR/bin/libgodot.ios.template_debug.x86_64.simulator.a"
+TVOS_ARM_RELEASE_LIB="$GODOT_DIR/bin/libgodot.ios.template_release.arm64.tvos.a"
+TVOS_ARM_SIM_RELEASE_LIB="$GODOT_DIR/bin/libgodot.ios.template_release.arm64.tvos.simulator.a"
+TVOS_ARM_DEBUG_LIB="$GODOT_DIR/bin/libgodot.ios.template_debug.arm64.tvos.a"
+TVOS_ARM_SIM_DEBUG_LIB="$GODOT_DIR/bin/libgodot.ios.template_debug.arm64.tvos.simulator.a"
 
 run_scons() {
     (
@@ -110,14 +122,20 @@ run_scons() {
 build_godot_artifacts() {
     local target="template_$CONFIGURATION"
 
-    echo "Building macOS libgodot ($CONFIGURATION)..."
-    run_scons platform=macos arch=arm64 target="$target" library_type=shared_library vulkan=no metal=yes disable_path_overrides=no
-    run_scons platform=macos arch=x86_64 target="$target" library_type=shared_library vulkan=no metal=yes disable_path_overrides=no
+    if [[ "$TVOS_ONLY" != "1" ]]; then
+        echo "Building macOS libgodot ($CONFIGURATION)..."
+        run_scons platform=macos arch=arm64 target="$target" library_type=shared_library vulkan=no metal=yes disable_path_overrides=no
+        run_scons platform=macos arch=x86_64 target="$target" library_type=shared_library vulkan=no metal=yes disable_path_overrides=no
 
-    echo "Building iOS libgodot ($CONFIGURATION)..."
-    run_scons platform=ios arch=arm64 simulator=no target="$target" vulkan=no metal=yes disable_path_overrides=no
-    run_scons platform=ios arch=arm64 simulator=yes target="$target" vulkan=no metal=yes disable_path_overrides=no
-    run_scons platform=ios arch=x86_64 simulator=yes target="$target" vulkan=no metal=yes disable_path_overrides=no
+        echo "Building iOS libgodot ($CONFIGURATION)..."
+        run_scons platform=ios arch=arm64 simulator=no target="$target" vulkan=no metal=yes disable_path_overrides=no
+        run_scons platform=ios arch=arm64 simulator=yes target="$target" vulkan=no metal=yes disable_path_overrides=no
+        run_scons platform=ios arch=x86_64 simulator=yes target="$target" vulkan=no metal=yes disable_path_overrides=no
+    fi
+
+    echo "Building tvOS libgodot ($CONFIGURATION)..."
+    run_scons platform=ios tvos=yes arch=arm64 simulator=no target="$target" vulkan=no metal=yes disable_path_overrides=no
+    run_scons platform=ios tvos=yes arch=arm64 simulator=yes target="$target" vulkan=no metal=yes disable_path_overrides=no
 }
 
 select_artifacts() {
@@ -127,44 +145,63 @@ select_artifacts() {
         IOS_DEVICE_LIB="$IOS_ARM_RELEASE_LIB"
         IOS_SIM_ARM_LIB="$IOS_ARM_SIM_RELEASE_LIB"
         IOS_SIM_X86_LIB="$IOS_X86_SIM_RELEASE_LIB"
+        TVOS_DEVICE_LIB="$TVOS_ARM_RELEASE_LIB"
+        TVOS_SIM_LIB="$TVOS_ARM_SIM_RELEASE_LIB"
     else
         MAC_ARM_LIB="$MAC_ARM_DEBUG_LIB"
         MAC_X86_LIB="$MAC_X86_DEBUG_LIB"
         IOS_DEVICE_LIB="$IOS_ARM_DEBUG_LIB"
         IOS_SIM_ARM_LIB="$IOS_ARM_SIM_DEBUG_LIB"
         IOS_SIM_X86_LIB="$IOS_X86_SIM_DEBUG_LIB"
+        TVOS_DEVICE_LIB="$TVOS_ARM_DEBUG_LIB"
+        TVOS_SIM_LIB="$TVOS_ARM_SIM_DEBUG_LIB"
     fi
 }
 
 zip_payloads() {
     local mac_zip="$OUTPUT_DIR/mac/libgodot-macos.xcframework.zip"
     local ios_zip="$OUTPUT_DIR/ios/libgodot-ios.xcframework.zip"
+    local tvos_zip="$OUTPUT_DIR/tvos/libgodot-tvos.xcframework.zip"
 
-    if [[ ! -d "$OUTPUT_DIR/mac/libgodot.xcframework" || ! -d "$OUTPUT_DIR/ios/libgodot.xcframework" ]]; then
-        echo "error: cannot create zips until both xcframeworks exist" >&2
+    if [[ ! -d "$OUTPUT_DIR/tvos/libgodot.xcframework" ]]; then
+        echo "error: cannot create zips until the tvOS xcframework exists" >&2
+        exit 1
+    fi
+    if [[ "$TVOS_ONLY" != "1" && ( ! -d "$OUTPUT_DIR/mac/libgodot.xcframework" || ! -d "$OUTPUT_DIR/ios/libgodot.xcframework" ) ]]; then
+        echo "error: cannot create all zips until the macOS and iOS xcframeworks exist" >&2
         exit 1
     fi
 
     echo "Creating SwiftPM payload zips..."
-    rm -f "$mac_zip" "$ios_zip"
-    (cd "$OUTPUT_DIR/mac" && ditto -c -k --sequesterRsrc --keepParent libgodot.xcframework libgodot-macos.xcframework.zip)
-    (cd "$OUTPUT_DIR/ios" && ditto -c -k --sequesterRsrc --keepParent libgodot.xcframework libgodot-ios.xcframework.zip)
+    rm -f "$tvos_zip"
+    (cd "$OUTPUT_DIR/tvos" && ditto -c -k --sequesterRsrc --keepParent libgodot.xcframework libgodot-tvos.xcframework.zip)
+    if [[ "$TVOS_ONLY" != "1" ]]; then
+        rm -f "$mac_zip" "$ios_zip"
+        (cd "$OUTPUT_DIR/mac" && ditto -c -k --sequesterRsrc --keepParent libgodot.xcframework libgodot-macos.xcframework.zip)
+        (cd "$OUTPUT_DIR/ios" && ditto -c -k --sequesterRsrc --keepParent libgodot.xcframework libgodot-ios.xcframework.zip)
+    fi
 
     echo ""
     echo "SwiftPM checksums:"
-    echo "macOS $(swift package compute-checksum "$mac_zip")"
-    echo "iOS   $(swift package compute-checksum "$ios_zip")"
+    if [[ "$TVOS_ONLY" != "1" ]]; then
+        echo "macOS $(swift package compute-checksum "$mac_zip")"
+        echo "iOS   $(swift package compute-checksum "$ios_zip")"
+    fi
+    echo "tvOS  $(swift package compute-checksum "$tvos_zip")"
     echo ""
     echo "Payloads:"
-    echo "  $mac_zip"
-    echo "  $ios_zip"
+    if [[ "$TVOS_ONLY" != "1" ]]; then
+        echo "  $mac_zip"
+        echo "  $ios_zip"
+    fi
+    echo "  $tvos_zip"
 }
 
 if [[ "$BUILD_ARTIFACTS" == "1" ]]; then
     build_godot_artifacts
 fi
 
-mkdir -p "$OUTPUT_DIR/mac" "$OUTPUT_DIR/ios"
+mkdir -p "$OUTPUT_DIR/mac" "$OUTPUT_DIR/ios" "$OUTPUT_DIR/tvos"
 
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -179,8 +216,9 @@ fi
 
 select_artifacts
 
-echo "Packaging macOS libgodot..."
-if [[ -f "$MAC_ARM_LIB" && -f "$MAC_X86_LIB" ]]; then
+if [[ "$TVOS_ONLY" != "1" ]]; then
+    echo "Packaging macOS libgodot..."
+    if [[ -f "$MAC_ARM_LIB" && -f "$MAC_X86_LIB" ]]; then
     if [[ -d "$OUTPUT_DIR/mac/libgodot.xcframework" ]]; then
         mv "$OUTPUT_DIR/mac/libgodot.xcframework" "$OUTPUT_DIR/mac/libgodot.xcframework.bak.$(date +%s)"
     fi
@@ -196,18 +234,18 @@ if [[ -f "$MAC_ARM_LIB" && -f "$MAC_X86_LIB" ]]; then
         -library "$UNIVERSAL_LIB" \
         -headers "$HEADERS_DIR" \
         -output "$OUTPUT_DIR/mac/libgodot.xcframework"
-else
-    cat <<EOF
+    else
+        cat <<EOF
 Missing macOS libgodot dylibs.
 Build them first with:
     cd $GODOT_DIR
     scons platform=macos arch=arm64 target=template_$CONFIGURATION library_type=shared_library vulkan=no metal=yes disable_path_overrides=no
     scons platform=macos arch=x86_64 target=template_$CONFIGURATION library_type=shared_library vulkan=no metal=yes disable_path_overrides=no
 EOF
-fi
+    fi
 
-echo "Packaging iOS libgodot..."
-if [[ -f "$IOS_DEVICE_LIB" ]]; then
+    echo "Packaging iOS libgodot..."
+    if [[ -f "$IOS_DEVICE_LIB" ]]; then
     if [[ -d "$OUTPUT_DIR/ios/libgodot.xcframework" ]]; then
         mv "$OUTPUT_DIR/ios/libgodot.xcframework" "$OUTPUT_DIR/ios/libgodot.xcframework.bak.$(date +%s)"
     fi
@@ -244,14 +282,44 @@ if [[ -f "$IOS_DEVICE_LIB" ]]; then
             -headers "$HEADERS_DIR" \
             -output "$OUTPUT_DIR/ios/libgodot.xcframework"
     fi
-else
-    cat <<EOF
+    else
+        cat <<EOF
 Missing iOS libgodot static libraries.
 Build them first with:
     cd $GODOT_DIR
     scons platform=ios arch=arm64 simulator=no target=template_$CONFIGURATION vulkan=no metal=yes disable_path_overrides=no
     scons platform=ios arch=arm64 simulator=yes target=template_$CONFIGURATION vulkan=no metal=yes disable_path_overrides=no
     scons platform=ios arch=x86_64 simulator=yes target=template_$CONFIGURATION vulkan=no metal=yes disable_path_overrides=no
+EOF
+    fi
+
+fi
+
+echo "Packaging tvOS libgodot..."
+if [[ -f "$TVOS_DEVICE_LIB" && -f "$TVOS_SIM_LIB" ]]; then
+    if [[ -d "$OUTPUT_DIR/tvos/libgodot.xcframework" ]]; then
+        mv "$OUTPUT_DIR/tvos/libgodot.xcframework" "$OUTPUT_DIR/tvos/libgodot.xcframework.bak.$(date +%s)"
+    fi
+
+    TVOS_DEVICE_DIR="$TMPDIR/tvos-device"
+    TVOS_SIM_DIR="$TMPDIR/tvos-simulator"
+    mkdir -p "$TVOS_DEVICE_DIR" "$TVOS_SIM_DIR"
+    cp "$TVOS_DEVICE_LIB" "$TVOS_DEVICE_DIR/libgodotkit.a"
+    cp "$TVOS_SIM_LIB" "$TVOS_SIM_DIR/libgodotkit.a"
+
+    xcodebuild -create-xcframework \
+        -library "$TVOS_DEVICE_DIR/libgodotkit.a" \
+        -headers "$HEADERS_DIR" \
+        -library "$TVOS_SIM_DIR/libgodotkit.a" \
+        -headers "$HEADERS_DIR" \
+        -output "$OUTPUT_DIR/tvos/libgodot.xcframework"
+else
+    cat <<EOF
+Missing tvOS libgodot static libraries.
+Build them first with:
+    cd $GODOT_DIR
+    scons platform=ios tvos=yes arch=arm64 simulator=no target=template_$CONFIGURATION vulkan=no metal=yes disable_path_overrides=no
+    scons platform=ios tvos=yes arch=arm64 simulator=yes target=template_$CONFIGURATION vulkan=no metal=yes disable_path_overrides=no
 EOF
 fi
 

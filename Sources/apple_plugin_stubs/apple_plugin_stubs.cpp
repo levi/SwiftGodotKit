@@ -11,10 +11,10 @@ __attribute__((weak)) void godot_apple_embedded_plugins_deinitialize() {}
 
 extern "C" {
     bool SDL_IsAppleTV(void) {
-        return false;
+        return TARGET_OS_TV;
     }
 
     bool SDL_IsIPad(void) {
-        return true;
+        return TARGET_OS_IOS;
     }
 }

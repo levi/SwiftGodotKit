@@ -1,9 +1,9 @@
 SWIFTGODOT ?= ../../SwiftGodot
 GODOT ?= ../../godot
 OUTPUT ?= ../build
-GODOT_REPO ?= migueldeicaza/godot
+GODOT_REPO ?= levi/godot
 
-.PHONY: all package release-payloads debug-payloads zip check-version publish-release release
+.PHONY: all package release-payloads tvos-release-payload debug-payloads zip check-version publish-release release
 
 all: package
 
@@ -12,6 +12,9 @@ package:
 
 release-payloads:
 	bash -x make-libgodot.xcframework --build --configuration release --zip $(SWIFTGODOT) $(GODOT) $(OUTPUT)
+
+tvos-release-payload:
+	bash -x make-libgodot.xcframework --build --configuration release --zip --tvos-only $(SWIFTGODOT) $(GODOT) $(OUTPUT)
 
 debug-payloads:
 	bash -x make-libgodot.xcframework --build --configuration debug --zip $(SWIFTGODOT) $(GODOT) $(OUTPUT)

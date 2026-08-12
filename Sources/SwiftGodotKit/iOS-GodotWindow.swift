@@ -2,7 +2,7 @@
 //  GodotAppWindow.swift
 //
 //
-#if os(iOS)
+#if os(iOS) || os(tvOS)
 
 import OSLog
 import SwiftUI
@@ -26,7 +26,9 @@ public struct GodotWindow: UIViewRepresentable {
         
         app.start()
         view.contentScaleFactor = UIScreen.main.scale
+        #if os(iOS)
         view.isMultipleTouchEnabled = true
+        #endif
         
         view.node = node
         view.app = app
@@ -120,6 +122,7 @@ public class UIGodotWindow: UIView {
         }
     }
     
+    #if os(iOS)
     public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let windowLayer, let app, app.instance != nil else { return }
         guard let windowId = targetWindowIdForInput(), let displayServer = DisplayServer.shared as? DisplayServerEmbedded else { return }
@@ -234,6 +237,7 @@ public class UIGodotWindow: UIView {
             displayServer.touchesCanceled(idx: Int32(touchId), window: windowId)
         }
     }
+    #endif
     
     func resizeWindow() {
         if let embedded, let subwindow, inited, isBoundWindowAlive() {

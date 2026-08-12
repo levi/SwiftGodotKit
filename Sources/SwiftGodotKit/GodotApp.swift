@@ -10,7 +10,7 @@ import OSLog
 #if canImport(Dispatch)
 import Dispatch
 #endif
-#if os(iOS)
+#if os(iOS) || os(tvOS)
 import UIKit
 #endif
 
@@ -80,6 +80,9 @@ public class GodotApp: ObservableObject {
 
     #if os(iOS)
     @ObservationIgnored var touches: [UITouch?] = []
+    #endif
+
+    #if os(iOS) || os(tvOS)
     @ObservationIgnored private var lifecycleObservers: [NSObjectProtocol] = []
     #endif
     
@@ -130,7 +133,7 @@ public class GodotApp: ObservableObject {
         self.appDelegate.app = self
         #endif
 
-        #if os(iOS)
+        #if os(iOS) || os(tvOS)
         registerLifecycleObservers()
         switch UIApplication.shared.applicationState {
         case .active:
@@ -150,7 +153,7 @@ public class GodotApp: ObservableObject {
     }
 
     deinit {
-        #if os(iOS)
+        #if os(iOS) || os(tvOS)
         for observer in lifecycleObservers {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -409,7 +412,7 @@ public class GodotApp: ObservableObject {
         }
     }
 
-    #if os(iOS)
+    #if os(iOS) || os(tvOS)
     private func registerLifecycleObservers() {
         let center = NotificationCenter.default
         let didBecomeActive = center.addObserver(
@@ -481,7 +484,7 @@ public class GodotApp: ObservableObject {
         setApplicationFocus(false)
     }
 
-    #if os(iOS)
+    #if os(iOS) || os(tvOS)
     func applicationDidEnterBackground() {
         setApplicationPaused(true)
     }

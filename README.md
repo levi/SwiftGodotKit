@@ -9,7 +9,7 @@ that ships with this workspace.
 # New SwiftGodotKit
 
 This branch contains the new embeddable system that is better suited
-to be embedded into an existing iOS and Mac app, and allows either a
+to be embedded into an existing iOS, tvOS, and Mac app, and allows either a
 full game to be displayed, or individual parts in an app.  This is
 based on the new 4.6-based `libgodot` patches that turn Godot into an
 embeddable library.
@@ -27,10 +27,10 @@ Godot UI elements are created programmatically.  This sample runs on macOS.
 
 ### iOS Sample Code
 
-For iOS, you need a proper container; you can look at the peer
+For iOS and tvOS, you need a proper container; you can look at the peer
 [`SwiftGodotKitSamples`](https://github.com/migueldeicaza/SwiftGodotKitSamples) 
-project which hosts this library and a sample, and deploys to iOS devices (there 
-is no support for the iOS simulator, as Godot does not run on those).
+project which hosts this library and a sample. This fork additionally ships a
+tvOS device and Apple-silicon simulator XCFramework slice.
 
 ## Using this
 
@@ -84,8 +84,8 @@ git clone git@github.com/migueldeicaza/godot -b swiftgodotkit-4.6 # libgodot-ena
 Important: the `SwiftGodot` and `godot` checkouts must be API-compatible.
 For this workspace, use:
 
-- `SwiftGodot` branch: `swiftgodotkit`
-- `godot` branch: `swiftgodotkit-4.6`
+- `SwiftGodot`: the revision pinned by `Package.swift`
+- `godot`: the Basis release tag named in the binary-target URLs
 
 Using mismatched branches can compile but fail at runtime with null
 `gdextension_classdb_get_method_bind` errors.
@@ -101,7 +101,7 @@ Prerequisites:
 
 - Xcode command-line tools.
 - `scons` available in `PATH`.
-- `gh` authenticated with permission to create releases in `migueldeicaza/godot`
+- `gh` authenticated with permission to create releases in `levi/godot`
   if you are publishing.
 - Adjacent checkouts at `../SwiftGodot` and `../godot`, or pass overrides to
   `make` as shown below.
@@ -113,6 +113,8 @@ SwiftGodotKit/build/mac/libgodot.xcframework
 SwiftGodotKit/build/mac/libgodot-macos.xcframework.zip
 SwiftGodotKit/build/ios/libgodot.xcframework
 SwiftGodotKit/build/ios/libgodot-ios.xcframework.zip
+SwiftGodotKit/build/tvos/libgodot.xcframework
+SwiftGodotKit/build/tvos/libgodot-tvos.xcframework.zip
 ```
 
 You can override the default paths and target repository:
@@ -175,6 +177,7 @@ Useful `make` targets:
 make package          # Package already-built artifacts into local xcframeworks.
 make zip              # Package already-built release artifacts and create zips/checksums.
 make release-payloads # Build release slices, package xcframeworks, create zips/checksums.
+make tvos-release-payload # Build and package only the tvOS device/simulator slices.
 make debug-payloads   # Build debug slices, package xcframeworks, create zips/checksums.
 make publish-release VERSION=v4.6.x
 make release VERSION=v4.6.x
@@ -199,7 +202,12 @@ Run these from the adjacent `godot` checkout:
    scons platform=ios arch=arm64 simulator=yes target=template_release vulkan=no metal=yes disable_path_overrides=no
    scons platform=ios arch=x86_64 simulator=yes target=template_release vulkan=no metal=yes disable_path_overrides=no
    ```
-3. Package everything:
+3. Build tvOS static archives (device + Apple silicon simulator):
+   ```
+   scons platform=ios tvos=yes arch=arm64 simulator=no target=template_release vulkan=no metal=yes disable_path_overrides=no
+   scons platform=ios tvos=yes arch=arm64 simulator=yes target=template_release vulkan=no metal=yes disable_path_overrides=no
+   ```
+4. Package everything:
    ```
    cd SwiftGodotKit/scripts
    make zip
@@ -225,8 +233,8 @@ and depend on the product:
 .product(name: "SwiftGodotKit", package: "SwiftGodotKit")
 ```
 
-SwiftPM downloads `libgodot-macos.xcframework.zip` or
-`libgodot-ios.xcframework.zip` automatically for the target platform.
+SwiftPM downloads the macOS, iOS, or tvOS XCFramework payload automatically
+for the target platform.
 
 Note for Godot 4.6 on macOS: template `libgodot` builds usually expose only
 `macos`/`headless` display drivers. `TrivialSample` therefore defaults to

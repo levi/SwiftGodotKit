@@ -12,11 +12,18 @@ let iosLibgodotTarget: Target = .binaryTarget(
     checksum: "ff1adc5ff2f91c6f04ab5891e6f8a98c5729e3364c03d3773d117de87dd29b6c"
 )
 
+let tvosLibgodotTarget: Target = .binaryTarget(
+    name: "tvos_libgodot",
+    url: "https://github.com/levi/godot/releases/download/v4.7.1-basis2/libgodot-tvos.xcframework.zip",
+    checksum: "d5d08e517a09363b0d02b76beedb1478a011ecb40d87462ad8fb644c1188703a"
+)
+
 let package = Package(
     name: "SwiftGodotKit",
     platforms: [
         .macOS(.v14),
-        .iOS(.v17)
+        .iOS(.v17),
+        .tvOS(.v17)
     ],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
@@ -27,7 +34,7 @@ let package = Package(
     ],
     dependencies: [
     		  // This is tag 0.75.0
-        .package(url: "https://github.com/migueldeicaza/SwiftGodot", revision: "48112dd50fffe01f0af78e445a16991ecdc6bc94"),
+        .package(url: "https://github.com/levi/SwiftGodot", revision: "74407acc58eba463518c3c89fb9f1111b966a15b"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -37,9 +44,10 @@ let package = Package(
             dependencies: [
                 "SwiftGodot",
                 "libgodot",
-                .target(name: "apple_plugin_stubs", condition: .when(platforms: [.iOS])),
+                .target(name: "apple_plugin_stubs", condition: .when(platforms: [.iOS, .tvOS])),
                 .target(name: "mac_libgodot", condition: .when(platforms: [.macOS])),
                 .target(name: "ios_libgodot", condition: .when(platforms: [.iOS])),
+                .target(name: "tvos_libgodot", condition: .when(platforms: [.tvOS])),
             ]
         ),
 
@@ -66,6 +74,7 @@ let package = Package(
 
         macLibgodotTarget,
         iosLibgodotTarget,
+        tvosLibgodotTarget,
         .systemLibrary(
             name: "libgodot"
         ),
