@@ -15,7 +15,7 @@ let iosLibgodotTarget: Target = .binaryTarget(
 let tvosLibgodotTarget: Target = .binaryTarget(
     name: "tvos_libgodot",
     url: "https://github.com/levi/godot/releases/download/v4.7.1-basis2/libgodot-tvos.xcframework.zip",
-    checksum: "d5d08e517a09363b0d02b76beedb1478a011ecb40d87462ad8fb644c1188703a"
+    checksum: "51a659f2c6e868148f4f732e3e775317e12c345e0ff32d974a2971756b8e064c"
 )
 
 let package = Package(
